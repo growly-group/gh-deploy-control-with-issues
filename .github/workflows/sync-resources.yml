@@ -6,6 +6,9 @@ on:
     branches: [main]
     paths:
       - deploy.config.yaml
+      - .github/workflows/sync-resources.yml
+      - .github/scripts/sync-resources.sh
+      - .github/scripts/lib/config.sh
 
 permissions:
   contents: read

@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate workflows and scripts
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install yq
+        run: |
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+
+      - name: Validate deploy.config.yaml
+        run: yq '.' deploy.config.yaml >/dev/null
+
+      - name: Syntax-check bash scripts
+        run: |
+          while IFS= read -r file; do
+            bash -n "$file"
+            echo "OK $file"
+          done < <(find .github/scripts -name '*.sh' -type f | sort)
+
+      - name: Validate composite action metadata
+        run: |
+          for file in actions/*/action.yml actions/deploy/action.yml; do
+            [[ -f "$file" ]] || continue
+            yq '.' "$file" >/dev/null
+            echo "OK $file"
+          done

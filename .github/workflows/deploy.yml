@@ -3,9 +3,15 @@ name: Deploy
 on:
   issues:
     types: [opened, labeled]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: Issue number to run the deploy pipeline for
+        required: true
+        type: string
 
 concurrency:
-  group: deploy-issue-${{ github.event.issue.number }}
+  group: deploy-issue-${{ github.event.issue.number || github.event.inputs.issue_number }}
   cancel-in-progress: false
 
 permissions:
@@ -43,7 +49,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_NUMBER: ${{ github.event.issue.number || github.event.inputs.issue_number }}
         run: bash .github/scripts/lib/matrix.sh validate
 
       - name: Build deployment matrix
@@ -78,7 +84,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_NUMBER: ${{ github.event.issue.number || github.event.inputs.issue_number }}
         run: |
           source .github/scripts/lib/config.sh
           users=$(cfg_approval_users | sed 's/^/@/' | paste -sd ', ' -)
@@ -90,7 +96,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_NUMBER: ${{ github.event.issue.number || github.event.inputs.issue_number }}
         run: |
           set -euo pipefail
           source .github/scripts/lib/gh-issue.sh
@@ -147,7 +153,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_NUMBER: ${{ github.event.issue.number || github.event.inputs.issue_number }}
         run: |
           source .github/scripts/lib/audit.sh
           audit_deploying "${{ matrix.service }}" "${{ matrix.image }}"
@@ -166,7 +172,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_NUMBER: ${{ github.event.issue.number || github.event.inputs.issue_number }}
           PREVIOUS_REF: ${{ steps.deploy.outputs.previous_ref }}
           DEPLOYED_REF: ${{ steps.deploy.outputs.deployed_ref }}
         run: |
@@ -185,7 +191,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_NUMBER: ${{ github.event.issue.number || github.event.inputs.issue_number }}
         run: |
           mkdir -p /tmp/failure-logs
           detail="${{ steps.deploy.outputs.failure_detail }}"
@@ -229,7 +235,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_NUMBER: ${{ github.event.issue.number || github.event.inputs.issue_number }}
         run: bash .github/scripts/healthcheck.sh "${{ matrix.service }}"
 
       - name: Fail on unhealthy service
@@ -284,7 +290,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_NUMBER: ${{ github.event.issue.number || github.event.inputs.issue_number }}
           SERVICES: ${{ needs.setup.outputs.services }}
           DEPLOY_RESULT: ${{ needs.deploy.result }}
           HEALTHCHECK_RESULT: ${{ needs.healthcheck.result }}
@@ -345,7 +351,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_NUMBER: ${{ github.event.issue.number || github.event.inputs.issue_number }}
         run: |
           PREVIOUS_REF="unknown"
           DEPLOYED_REF="${{ matrix.image }}"
@@ -415,7 +421,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_NUMBER: ${{ github.event.issue.number || github.event.inputs.issue_number }}
           MANUAL_ROLLBACK_POLL_SECONDS: "300"
           POLL_INTERVAL_SECONDS: "30"
         run: |
@@ -496,7 +502,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_NUMBER: ${{ github.event.issue.number || github.event.inputs.issue_number }}
           SERVICES: ${{ needs.setup.outputs.services }}
           NOTIFY_ON_SUCCESS: ${{ needs.setup.outputs.notify_on_success }}
           DEPLOY_RESULT: ${{ needs.deploy.result }}
@@ -525,7 +531,7 @@ jobs:
               audit_success_notify "$SERVICES" "$mentions" "$CHANGELOG_URL" "$CHANGELOG_SUMMARY"
             fi
             bash .github/scripts/changelog.sh record
-            gh issue close "${{ github.event.issue.number }}"
+            gh issue close "${{ github.event.issue.number || github.event.inputs.issue_number }}"
             exit 0
           fi
 
@@ -545,7 +551,7 @@ jobs:
               gh label create "deploy:rolled-back" --description "Deploy failed but environment was rolled back" --color "FBCA04" 2>/dev/null \
                 || gh label edit "deploy:rolled-back" --description "Deploy failed but environment was rolled back" 2>/dev/null \
                 || true
-              gh issue edit "${{ github.event.issue.number }}" --add-label "deploy:rolled-back"
+              gh issue edit "${{ github.event.issue.number || github.event.inputs.issue_number }}" --add-label "deploy:rolled-back"
             elif [[ "$ROLLBACK_RESULT" == "failure" ]]; then
               audit_rollback_summary "failed" "$mentions" "$failure_summary"
             else

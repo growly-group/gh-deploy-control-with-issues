@@ -118,8 +118,15 @@ env:
 
 | Workflow | Trigger | Purpose |
 |----------|---------|---------|
-| `.github/workflows/sync-resources.yml` | `workflow_dispatch`, push to `deploy.config.yaml` | Provision labels and issue types |
-| `.github/workflows/deploy.yml` | Issue `opened`, `labeled` | Full deploy pipeline |
+| `.github/workflows/ci.yml` | Push/PR em `main`, manual | Valida scripts e `deploy.config.yaml` |
+| `.github/workflows/sync-resources.yml` | Manual, push em `deploy.config.yaml` ou scripts de sync | Provision labels and issue types |
+| `.github/workflows/deploy.yml` | Issue `opened`/`labeled`, manual (com número da issue) | Full deploy pipeline |
+
+**Importante:** o deploy **não roda em todo commit**. Ele dispara quando:
+1. Uma issue recebe o evento `opened` ou `labeled` (com type/label de deploy + labels de serviço), ou
+2. Você executa manualmente **Deploy** em Actions informando o `issue_number`.
+
+Cada push em `main` executa o **CI** para validar o repositório.
 
 ## Architecture
 

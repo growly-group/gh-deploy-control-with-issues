@@ -1,0 +1,92 @@
+name: Deploy service router
+description: Routes deployment to the strategy-specific composite action.
+
+inputs:
+  strategy:
+    description: Deploy strategy name (ssh-docker, cloudflare-pages, script)
+    required: true
+  service:
+    description: Service name
+    required: true
+  image:
+    description: Container image to deploy
+    required: true
+  config:
+    description: JSON strategy config
+    required: true
+
+outputs:
+  previous_ref:
+    description: Image reference before deploy
+    value: ${{ steps.collect.outputs.previous_ref }}
+  deployed_ref:
+    description: Image reference deployed
+    value: ${{ steps.collect.outputs.deployed_ref }}
+  deploy_status:
+    description: success or failure
+    value: ${{ steps.collect.outputs.deploy_status }}
+  failure_detail:
+    description: Error detail when deploy fails
+    value: ${{ steps.collect.outputs.failure_detail }}
+
+runs:
+  using: composite
+  steps:
+    - name: Deploy via SSH + Docker
+      if: inputs.strategy == 'ssh-docker'
+      id: ssh
+      uses: ./actions/deploy-ssh-docker
+      with:
+        service: ${{ inputs.service }}
+        image: ${{ inputs.image }}
+        config: ${{ inputs.config }}
+
+    - name: Deploy to Cloudflare Pages
+      if: inputs.strategy == 'cloudflare-pages'
+      id: cf
+      uses: ./actions/deploy-cloudflare-pages
+      with:
+        service: ${{ inputs.service }}
+        image: ${{ inputs.image }}
+        config: ${{ inputs.config }}
+
+    - name: Deploy via script
+      if: inputs.strategy == 'script'
+      id: script
+      uses: ./actions/deploy-script
+      with:
+        service: ${{ inputs.service }}
+        image: ${{ inputs.image }}
+        config: ${{ inputs.config }}
+
+    - name: Collect deploy outputs
+      id: collect
+      shell: bash
+      run: |
+        set -euo pipefail
+        strategy="${{ inputs.strategy }}"
+        case "$strategy" in
+          ssh-docker)
+            echo "previous_ref=${{ steps.ssh.outputs.previous_ref }}" >> "$GITHUB_OUTPUT"
+            echo "deployed_ref=${{ steps.ssh.outputs.deployed_ref }}" >> "$GITHUB_OUTPUT"
+            echo "deploy_status=${{ steps.ssh.outputs.deploy_status }}" >> "$GITHUB_OUTPUT"
+            echo "failure_detail=${{ steps.ssh.outputs.failure_detail }}" >> "$GITHUB_OUTPUT"
+            ;;
+          cloudflare-pages)
+            echo "previous_ref=${{ steps.cf.outputs.previous_ref }}" >> "$GITHUB_OUTPUT"
+            echo "deployed_ref=${{ steps.cf.outputs.deployed_ref }}" >> "$GITHUB_OUTPUT"
+            echo "deploy_status=${{ steps.cf.outputs.deploy_status }}" >> "$GITHUB_OUTPUT"
+            echo "failure_detail=${{ steps.cf.outputs.failure_detail }}" >> "$GITHUB_OUTPUT"
+            ;;
+          script)
+            echo "previous_ref=${{ steps.script.outputs.previous_ref }}" >> "$GITHUB_OUTPUT"
+            echo "deployed_ref=${{ steps.script.outputs.deployed_ref }}" >> "$GITHUB_OUTPUT"
+            echo "deploy_status=${{ steps.script.outputs.deploy_status }}" >> "$GITHUB_OUTPUT"
+            echo "failure_detail=${{ steps.script.outputs.failure_detail }}" >> "$GITHUB_OUTPUT"
+            ;;
+          *)
+            echo "deploy_status=failure" >> "$GITHUB_OUTPUT"
+            echo "failure_detail=Unknown deploy strategy: ${strategy}" >> "$GITHUB_OUTPUT"
+            exit 1
+            ;;
+        esac

@@ -154,8 +154,9 @@ jobs:
 
       - name: Deploy service
         id: deploy
-        uses: ./actions/deploy-${{ matrix.strategy }}
+        uses: ./actions/deploy
         with:
+          strategy: ${{ matrix.strategy }}
           service: ${{ matrix.service }}
           image: ${{ matrix.image }}
           config: ${{ matrix.config }}

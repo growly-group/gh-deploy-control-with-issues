@@ -110,9 +110,9 @@ env:
 
 ### Adding a custom strategy
 
-1. Create `actions/deploy-<name>/action.yml` with outputs: `previous_ref`, `deployed_ref`, `deploy_status`
-2. Set `strategy: <name>` in `deploy.config.yaml`
-3. No changes to the core orchestration workflow required
+1. Create `actions/deploy-<name>/action.yml` with outputs: `previous_ref`, `deployed_ref`, `deploy_status`, `failure_detail`
+2. Register the strategy in `actions/deploy/action.yml`
+3. Set `strategy: <name>` in `deploy.config.yaml`
 
 ## Workflows
 

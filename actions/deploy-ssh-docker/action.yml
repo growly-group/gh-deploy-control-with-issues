@@ -1,0 +1,94 @@
+name: Deploy via SSH + Docker
+description: Pull container image and restart service on a remote host via SSH.
+
+inputs:
+  service:
+    description: Service name
+    required: true
+  image:
+    description: Container image to deploy
+    required: true
+  config:
+    description: JSON strategy config
+    required: true
+
+outputs:
+  previous_ref:
+    description: Image reference before deploy
+    value: ${{ steps.deploy.outputs.previous_ref }}
+  deployed_ref:
+    description: Image reference deployed
+    value: ${{ steps.deploy.outputs.deployed_ref }}
+  deploy_status:
+    description: success or failure
+    value: ${{ steps.deploy.outputs.deploy_status }}
+  failure_detail:
+    description: Error detail when deploy fails
+    value: ${{ steps.deploy.outputs.failure_detail }}
+
+runs:
+  using: composite
+  steps:
+    - name: Deploy via SSH
+      id: deploy
+      shell: bash
+      env:
+        SERVICE: ${{ inputs.service }}
+        IMAGE: ${{ inputs.image }}
+        CONFIG_JSON: ${{ inputs.config }}
+      run: |
+        set -uo pipefail
+
+        write_failure() {
+          local detail="$1"
+          echo "deploy_status=failure" >> "$GITHUB_OUTPUT"
+          {
+            echo "failure_detail<<EOF"
+            echo "$detail"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+        }
+
+        SSH_HOST_SECRET=$(echo "$CONFIG_JSON" | jq -r '.ssh_host_secret')
+        SSH_USER_SECRET=$(echo "$CONFIG_JSON" | jq -r '.ssh_user_secret')
+        SSH_KEY_SECRET=$(echo "$CONFIG_JSON" | jq -r '.ssh_key_secret')
+        SSH_PORT_VAR=$(echo "$CONFIG_JSON" | jq -r '.ssh_port_var // empty')
+        CONTAINER_NAME=$(echo "$CONFIG_JSON" | jq -r '.container_name')
+
+        SSH_HOST="${!SSH_HOST_SECRET:-}"
+        SSH_USER="${!SSH_USER_SECRET:-}"
+        SSH_KEY="${!SSH_KEY_SECRET:-}"
+        if [[ -z "$SSH_HOST" || -z "$SSH_USER" || -z "$SSH_KEY" ]]; then
+          write_failure "Missing SSH secrets (host, user, or key) for service ${SERVICE}"
+          exit 1
+        fi
+
+        SSH_PORT="${SSH_PORT_VAR:+${!SSH_PORT_VAR}}"
+        SSH_PORT="${SSH_PORT:-22}"
+
+        mkdir -p ~/.ssh
+        echo "$SSH_KEY" > ~/.ssh/deploy_key
+        chmod 600 ~/.ssh/deploy_key
+
+        PREVIOUS_REF="unknown"
+        PREVIOUS_REF=$(ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -p "$SSH_PORT" "${SSH_USER}@${SSH_HOST}" \
+          "sudo docker inspect --format='{{.Config.Image}}' '${CONTAINER_NAME}' 2>/dev/null || echo unknown" \
+          2>/tmp/ssh.err) || PREVIOUS_REF="unknown"
+
+        if ! ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no -p "$SSH_PORT" "${SSH_USER}@${SSH_HOST}" bash -s 2>/tmp/ssh.err <<EOF
+        set -euo pipefail
+        sudo docker pull "${IMAGE}"
+        if sudo docker ps -a --format '{{.Names}}' | grep -qx "${CONTAINER_NAME}"; then
+          sudo docker stop "${CONTAINER_NAME}" || true
+          sudo docker rm "${CONTAINER_NAME}" || true
+        fi
+        sudo docker run -d --name "${CONTAINER_NAME}" --restart unless-stopped "${IMAGE}"
+        EOF
+        then
+          write_failure "$(tail -20 /tmp/ssh.err 2>/dev/null || echo "SSH/docker deploy failed for ${SERVICE}")"
+          exit 1
+        fi
+
+        echo "previous_ref=${PREVIOUS_REF}" >> "$GITHUB_OUTPUT"
+        echo "deployed_ref=${IMAGE}" >> "$GITHUB_OUTPUT"
+        echo "deploy_status=success" >> "$GITHUB_OUTPUT"

@@ -1,0 +1,69 @@
+name: Deploy via custom script
+description: Execute a repository script with standardized deploy environment variables.
+
+inputs:
+  service:
+    description: Service name
+    required: true
+  image:
+    description: Container image to deploy
+    required: true
+  config:
+    description: JSON strategy config
+    required: true
+
+outputs:
+  previous_ref:
+    description: Image reference before deploy
+    value: ${{ steps.deploy.outputs.previous_ref }}
+  deployed_ref:
+    description: Image reference deployed
+    value: ${{ steps.deploy.outputs.deployed_ref }}
+  deploy_status:
+    description: success or failure
+    value: ${{ steps.deploy.outputs.deploy_status }}
+  failure_detail:
+    description: Error detail when deploy fails
+    value: ${{ steps.deploy.outputs.failure_detail }}
+
+runs:
+  using: composite
+  steps:
+    - name: Run deploy script
+      id: deploy
+      shell: bash
+      env:
+        SERVICE: ${{ inputs.service }}
+        IMAGE: ${{ inputs.image }}
+        CONFIG_JSON: ${{ inputs.config }}
+        ROLLBACK_MODE: "false"
+      run: |
+        set -uo pipefail
+
+        write_failure() {
+          local detail="$1"
+          echo "deploy_status=failure" >> "$GITHUB_OUTPUT"
+          {
+            echo "failure_detail<<EOF"
+            echo "$detail"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+        }
+
+        SCRIPT_PATH=$(echo "$CONFIG_JSON" | jq -r '.script')
+        if [[ ! -f "$SCRIPT_PATH" ]]; then
+          write_failure "Deploy script not found: ${SCRIPT_PATH}"
+          exit 1
+        fi
+
+        PREVIOUS_REF="${PREVIOUS_REF:-unknown}"
+        export SERVICE IMAGE ROLLBACK_MODE PREVIOUS_REF
+
+        if ! bash "$SCRIPT_PATH" 2>/tmp/script.err; then
+          write_failure "script exited with error: $(tail -20 /tmp/script.err 2>/dev/null || echo unknown)"
+          exit 1
+        fi
+
+        echo "previous_ref=${PREVIOUS_REF}" >> "$GITHUB_OUTPUT"
+        echo "deployed_ref=${IMAGE}" >> "$GITHUB_OUTPUT"
+        echo "deploy_status=success" >> "$GITHUB_OUTPUT"

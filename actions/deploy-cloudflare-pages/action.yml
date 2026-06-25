@@ -1,0 +1,72 @@
+name: Deploy to Cloudflare Pages
+description: Deploy static assets to Cloudflare Pages.
+
+inputs:
+  service:
+    description: Service name
+    required: true
+  image:
+    description: Container image reference (recorded for audit)
+    required: true
+  config:
+    description: JSON strategy config
+    required: true
+
+outputs:
+  previous_ref:
+    description: Previous deployment reference
+    value: ${{ steps.deploy.outputs.previous_ref }}
+  deployed_ref:
+    description: Deployed reference
+    value: ${{ steps.deploy.outputs.deployed_ref }}
+  deploy_status:
+    description: success or failure
+    value: ${{ steps.deploy.outputs.deploy_status }}
+  failure_detail:
+    description: Error detail when deploy fails
+    value: ${{ steps.deploy.outputs.failure_detail }}
+
+runs:
+  using: composite
+  steps:
+    - name: Deploy to Cloudflare Pages
+      id: deploy
+      shell: bash
+      env:
+        SERVICE: ${{ inputs.service }}
+        IMAGE: ${{ inputs.image }}
+        CONFIG_JSON: ${{ inputs.config }}
+        CLOUDFLARE_API_TOKEN: ${{ env.CLOUDFLARE_API_TOKEN }}
+        CLOUDFLARE_ACCOUNT_ID: ${{ env.CLOUDFLARE_ACCOUNT_ID }}
+      run: |
+        set -uo pipefail
+
+        write_failure() {
+          local detail="$1"
+          echo "deploy_status=failure" >> "$GITHUB_OUTPUT"
+          {
+            echo "failure_detail<<EOF"
+            echo "$detail"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+        }
+
+        PROJECT_NAME=$(echo "$CONFIG_JSON" | jq -r '.project_name')
+        DIRECTORY=$(echo "$CONFIG_JSON" | jq -r '.directory')
+
+        if [[ -z "${CLOUDFLARE_API_TOKEN:-}" || -z "${CLOUDFLARE_ACCOUNT_ID:-}" ]]; then
+          write_failure "CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID must be set in the workflow environment."
+          exit 1
+        fi
+
+        if ! npx --yes wrangler@3 pages deploy "$DIRECTORY" \
+          --project-name="$PROJECT_NAME" \
+          --branch=main \
+          --commit-dirty=true 2>/tmp/cf.err; then
+          write_failure "$(tail -20 /tmp/cf.err 2>/dev/null || echo "Cloudflare Pages deploy failed for ${SERVICE}")"
+          exit 1
+        fi
+
+        echo "previous_ref=unknown" >> "$GITHUB_OUTPUT"
+        echo "deployed_ref=${IMAGE}" >> "$GITHUB_OUTPUT"
+        echo "deploy_status=success" >> "$GITHUB_OUTPUT"

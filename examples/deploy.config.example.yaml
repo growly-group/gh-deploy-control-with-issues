@@ -1,0 +1,82 @@
+# Example deployment configuration for gh-deploy-control-with-issues
+#
+# Copy to deploy.config.yaml at the repository root and customize.
+#
+# Schema:
+#   deployment.issue_type     - GitHub Issue Type name that triggers deploys
+#   deployment.fallback_trigger_label - Label fallback for user-owned repos
+#   deployment.rollback         - Manual (👀) and automatic rollback settings
+#   deployment.healthcheck      - Global health check defaults
+#   deployment.observability    - Failure log excerpts and success notifications
+#     notify_on_success         - Post success comment on issue (default: true)
+#     changelog.enabled         - Include compare link between deploys (default: true)
+#   services.<name>             - Service key; also used as GitHub label name
+#     image                     - Container image reference
+#     strategy                  - ssh-docker | cloudflare-pages | script
+#     config                    - Strategy-specific settings
+#     healthcheck               - Per-service overrides (url, endpoint, etc.)
+
+#   deployment.approval         - Optional approval gate via 🚀 reaction
+
+deployment:
+  issue_type: Deploy
+  fallback_trigger_label: deploy
+
+  approval:
+    enabled: true
+    users:
+      - techlead
+      - sre
+
+  rollback:
+    enabled: true
+    automatic: true
+
+  healthcheck:
+    enabled: true
+    endpoint: /health
+    timeout: 300
+    retries: 10
+    interval: 15
+
+  observability:
+    include_failed_logs: true
+    max_log_lines: 40
+    max_log_chars: 3500
+    notify_on_success: true
+    changelog:
+      enabled: true
+      max_commits: 20
+      state_variable: DEPLOY_LAST_GIT_SHA
+
+services:
+  frontend:
+    image: ghcr.io/company/frontend
+    strategy: cloudflare-pages
+    config:
+      project_name: my-app
+      directory: apps/frontend/dist
+      account_id_secret: CLOUDFLARE_ACCOUNT_ID
+      api_token_secret: CLOUDFLARE_API_TOKEN
+    healthcheck:
+      url: https://app.example.com/health
+
+  backend:
+    image: ghcr.io/company/backend
+    strategy: ssh-docker
+    config:
+      ssh_host_secret: PRODUCTION_SSH_HOST
+      ssh_user_secret: PRODUCTION_SSH_USERNAME
+      ssh_key_secret: PRODUCTION_SSH_KEY
+      ssh_port_var: PRODUCTION_SSH_PORT
+      container_name: backend
+    healthcheck:
+      url: https://api.example.com/health
+
+  worker:
+    image: ghcr.io/company/worker
+    strategy: script
+    config:
+      script: .github/deploy-scripts/worker.sh
+    healthcheck:
+      url: https://worker.example.com/health

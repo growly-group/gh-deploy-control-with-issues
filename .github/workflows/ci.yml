@@ -39,3 +39,10 @@ jobs:
             yq '.' "$file" >/dev/null
             echo "OK $file"
           done
+
+      - name: Validate deploy issue template matches config
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          bash .github/scripts/sync-resources.sh --template-only
+          git diff --exit-code .github/ISSUE_TEMPLATE/deploy.yml

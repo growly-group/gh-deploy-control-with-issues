@@ -15,6 +15,187 @@ Open source deployment platform for GitHub Actions. Trigger production deploys f
 - **Audit trail** posted as issue comments
 - **GitHub CLI first** — `gh`, `gh label`, `gh issue`, `gh api`
 
+## Tutorial: adopt in an existing project
+
+This guide shows how to integrate the platform into a repository that **already has code and pipelines**. Deploys are triggered by issues — this does not replace your existing build/CI, only the production release step.
+
+### Prerequisites
+
+- GitHub repository with Actions enabled
+- Permission to create repository secrets (and organization secrets, if applicable)
+- **GitHub CLI ≥ 2.94** on runners (`ubuntu-latest` includes it)
+- For Issue Types in organization repositories: PAT with `admin:org` scope (see below)
+
+### Step 1 — Copy files from this repository
+
+In your project, copy the structure below from [gh-deploy-control-with-issues](https://github.com/bunx-ai/gh-deploy-control-with-issues):
+
+```text
+your-project/
+├── deploy.config.yaml              ← create from example (step 2)
+├── .github/
+│   ├── workflows/
+│   │   ├── deploy.yml
+│   │   ├── sync-resources.yml
+│   │   └── ci.yml                  ← optional, recommended
+│   ├── scripts/                    ← entire folder
+│   ├── ISSUE_TEMPLATE/             ← optional (sync generates deploy.yml)
+│   └── deploy-scripts/             ← only if using strategy: script
+└── actions/
+    ├── deploy/action.yml           ← required router
+    ├── deploy-ssh-docker/
+    ├── deploy-cloudflare-pages/
+    └── deploy-script/
+```
+
+**Via terminal** (with authenticated `gh`):
+
+```bash
+# At your repository root
+OWNER=bunx-ai
+REPO=gh-deploy-control-with-issues
+TMP=$(mktemp -d)
+gh repo clone "$OWNER/$REPO" "$TMP"
+
+cp -R "$TMP/.github/workflows/deploy.yml" "$TMP/.github/workflows/sync-resources.yml" .github/workflows/
+cp -R "$TMP/.github/scripts" .github/
+cp -R "$TMP/actions" .
+cp "$TMP/examples/deploy.config.example.yaml" deploy.config.yaml
+mkdir -p .github/deploy-scripts
+cp "$TMP/examples/deploy-scripts/worker.sh" .github/deploy-scripts/   # if using script strategy
+
+# Optional: validation CI
+cp "$TMP/.github/workflows/ci.yml" .github/workflows/
+
+rm -rf "$TMP"
+```
+
+> **Tip:** do this on a branch (`feat/deploy-via-issues`) and open a PR for review before merging to `main`.
+
+### Step 2 — Configure `deploy.config.yaml`
+
+Edit the file at your project root. Each key under `services` becomes a GitHub **label** and a job in the deploy matrix.
+
+1. List the services you currently publish (API, frontend, worker, etc.)
+2. Choose a `strategy` for each (`ssh-docker`, `cloudflare-pages`, or `script`)
+3. Fill `config` with **secret names** the workflow will inject (do not put sensitive values in the YAML)
+4. Set `deployment.approval.users` to the GitHub usernames of approvers
+
+Minimal example for a Docker backend over SSH:
+
+```yaml
+deployment:
+  issue_type: Deploy
+  fallback_trigger_label: deploy
+  approval:
+    enabled: true
+    users: [your-github-username]
+  rollback:
+    enabled: true
+    automatic: true
+
+services:
+  api:
+    image: ghcr.io/your-org/your-api
+    strategy: ssh-docker
+    config:
+      ssh_host_secret: PRODUCTION_SSH_HOST
+      ssh_user_secret: PRODUCTION_SSH_USERNAME
+      ssh_key_secret: PRODUCTION_SSH_KEY
+      container_name: api
+    healthcheck:
+      url: https://api.yourdomain.com/health
+```
+
+See `examples/deploy.config.example.yaml` in this repository for all options.
+
+### Step 3 — Map secrets in the workflow
+
+`deploy.config.yaml` references secrets **by name**. The workflow must expose them as environment variables.
+
+Open `.github/workflows/deploy.yml` and add your secrets to each `env:` block in the `deploy`, `healthcheck`, and `rollback` jobs:
+
+```yaml
+env:
+  PRODUCTION_SSH_HOST: ${{ secrets.PRODUCTION_SSH_HOST }}
+  PRODUCTION_SSH_USERNAME: ${{ secrets.PRODUCTION_SSH_USERNAME }}
+  PRODUCTION_SSH_KEY: ${{ secrets.PRODUCTION_SSH_KEY }}
+  CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+  CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+```
+
+Only include secrets your services actually use.
+
+### Step 4 — Create secrets in GitHub
+
+Under **Settings → Secrets and variables → Actions**, create the secrets referenced in step 3 (SSH hosts, Cloudflare tokens, etc.).
+
+For **organization** repositories using Issue Type `Deploy`:
+
+| Secret | Scope | Purpose |
+|--------|-------|---------|
+| `ORG_ADMIN_TOKEN` | PAT with `admin:org` | Create Issue Type in the org (sync workflow) |
+| Other secrets | Deploy/infra | SSH, Cloudflare, etc. |
+
+**User-owned** repositories (personal accounts) do not need `ORG_ADMIN_TOKEN` — sync creates the `deploy` label as a fallback.
+
+### Step 5 — Disable the old deploy workflow (if any)
+
+If you had a monolithic workflow (e.g. `cd.yml` that deployed on every push or via issues with `[DEPLOYMENT]`):
+
+1. **Disable or remove** the old workflow to avoid concurrent deploys
+2. Move custom logic to:
+   - `strategy: script` + a script in `.github/deploy-scripts/`, or
+   - a new action in `actions/deploy-<name>/` (see [Adding a custom strategy](#adding-a-custom-strategy))
+3. Compare with the table in [Migration from legacy `cd.yml`](#migration-from-legacy-cdyml)
+
+Your build/test CI can stay as-is — this platform only runs when a deploy issue is opened or labeled.
+
+### Step 6 — Sync labels, Issue Type, and template
+
+Merge your branch to `main` and run **Sync Deploy Resources** (Actions → Sync Deploy Resources → Run workflow).
+
+Sync will:
+
+- Create labels for each service (`api`, `frontend`, …)
+- Create Issue Type `Deploy` in the org (with `ORG_ADMIN_TOKEN`) or the `deploy` label (fallback)
+- Generate/update `.github/ISSUE_TEMPLATE/deploy.yml`
+
+### Step 7 — First test deploy
+
+1. **Issues → New issue → Deploy**
+2. Select the test service (e.g. `api`) and describe the reason
+3. If `approval.enabled: true`, a user in `approval.users` reacts with 🚀
+4. Monitor in **Actions → Deploy**
+
+**Manual test** (without opening a new issue):
+
+```bash
+gh workflow run deploy.yml -f issue_number=123
+```
+
+Replace `123` with a valid issue number (type `Deploy` + service label).
+
+### Quick checklist
+
+| Item | Done? |
+|------|-------|
+| `.github/` and `actions/` files copied | ☐ |
+| `deploy.config.yaml` with your services | ☐ |
+| Secrets mapped in `deploy.yml` | ☐ |
+| Secrets created in the repository | ☐ |
+| `ORG_ADMIN_TOKEN` (org + Issue Type only) | ☐ |
+| Old deploy workflow disabled | ☐ |
+| Sync Deploy Resources run | ☐ |
+| Test issue with successful deploy | ☐ |
+
+### Coexisting with the rest of your project
+
+- **Monorepo:** one service per key in `services`; labels select what to deploy for that issue
+- **Images:** set `image` to the desired tag; the workflow uses the current commit SHA/ref for the changelog — adjust scripts if you always use `latest`
+- **Other workflows:** no conflict; deploy uses `concurrency` per issue number
+- **Existing issue templates:** the `Deploy` template coexists with yours; `config.yml` only disables blank issues if you copy ours
+
 ## Quick start
 
 ### 1. Configure services
@@ -88,9 +269,25 @@ env:
 
 ### 4. Open a deploy issue
 
-1. Create an issue with **Issue Type**: `Deploy` (org repos) **or** label `deploy` (user repos)
-2. Add labels for the services to deploy (e.g. `frontend`, `backend`)
-3. If approval is enabled, an authorized user reacts with 🚀
+Use the **Deploy** issue template (generated from `deploy.config.yaml` by the sync workflow):
+
+1. **New issue** → **Deploy**
+2. Select the service labels and fill in context
+3. The template sets **Issue Type** `Deploy` (org) and label `deploy` (fallback)
+4. If approval is enabled, an authorized user reacts with 🚀
+
+The template is kept in sync when you change services in `deploy.config.yaml` — run **Sync Deploy Resources** or push to `main`.
+
+**CLI alternative:**
+
+```bash
+gh issue create \
+  --type Deploy \
+  --title "[Deploy] Release v1.2.0" \
+  --label deploy \
+  --label backend \
+  --body "Reason: merged PR #42"
+```
 
 ## Reaction reference
 
@@ -118,15 +315,15 @@ env:
 
 | Workflow | Trigger | Purpose |
 |----------|---------|---------|
-| `.github/workflows/ci.yml` | Push/PR em `main`, manual | Valida scripts e `deploy.config.yaml` |
-| `.github/workflows/sync-resources.yml` | Manual, push em `deploy.config.yaml` ou scripts de sync | Provision labels and issue types |
-| `.github/workflows/deploy.yml` | Issue `opened`/`labeled`, manual (com número da issue) | Full deploy pipeline |
+| `.github/workflows/ci.yml` | Push/PR to `main`, manual | Validate scripts and `deploy.config.yaml` |
+| `.github/workflows/sync-resources.yml` | Manual, push to `deploy.config.yaml` or sync scripts | Provision labels, issue types, and deploy issue template |
+| `.github/workflows/deploy.yml` | Issue `opened`/`labeled`, manual (with `issue_number`) | Full deploy pipeline |
 
-**Importante:** o deploy **não roda em todo commit**. Ele dispara quando:
-1. Uma issue recebe o evento `opened` ou `labeled` (com type/label de deploy + labels de serviço), ou
-2. Você executa manualmente **Deploy** em Actions informando o `issue_number`.
+**Important:** deploy does **not** run on every commit. It triggers when:
+1. An issue receives `opened` or `labeled` (with deploy type/label + service labels), or
+2. You manually run **Deploy** in Actions with an `issue_number`.
 
-Cada push em `main` executa o **CI** para validar o repositório.
+Every push to `main` runs **CI** to validate the repository.
 
 ## Architecture
 

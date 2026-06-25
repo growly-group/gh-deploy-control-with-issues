@@ -15,16 +15,28 @@ GRAPHQL_HEADERS=(
   -H "X-Github-Next-Global-ID: 1"
 )
 
-gh_graphql() {
-  gh api graphql "${GRAPHQL_HEADERS[@]}" "$@"
-}
-
 repo_owner() {
   echo "${GITHUB_REPOSITORY%/*}"
 }
 
 repo_name() {
   echo "${GITHUB_REPOSITORY#*/}"
+}
+
+issue_type_gh_token() {
+  if [[ -n "${ORG_ADMIN_TOKEN:-}" ]]; then
+    echo "$ORG_ADMIN_TOKEN"
+  else
+    echo "${GH_TOKEN:-${GITHUB_TOKEN:-}}"
+  fi
+}
+
+gh_as_issue_type_admin() {
+  GH_TOKEN="$(issue_type_gh_token)" gh "$@"
+}
+
+gh_graphql_as_issue_type_admin() {
+  GH_TOKEN="$(issue_type_gh_token)" gh api graphql "${GRAPHQL_HEADERS[@]}" "$@"
 }
 
 ensure_label() {
@@ -54,11 +66,49 @@ sync_fallback_trigger_label() {
   ensure_label "$fallback" "Triggers deployment workflow (fallback when Issue Types are unavailable)"
 }
 
-sync_issue_type() {
-  local type_name owner_typename org_id existing
-  type_name="$(cfg_issue_type)"
+issue_type_exists_rest() {
+  local type_name="$1"
+  local org="$2"
+  gh_as_issue_type_admin api "orgs/${org}/issue-types" --jq ".[] | select(.name == \"${type_name}\") | .id" 2>/dev/null || true
+}
 
-  owner_typename="$(gh_graphql \
+create_issue_type_rest() {
+  local type_name="$1"
+  local org="$2"
+  gh_as_issue_type_admin api -X POST "orgs/${org}/issue-types" \
+    -f name="$type_name" \
+    -f is_enabled=true \
+    -f description="Deployment requests (managed by gh-deploy-control-with-issues)" \
+    -f color="blue" \
+    --jq '.name'
+}
+
+create_issue_type_graphql() {
+  local type_name="$1"
+  local org_id="$2"
+  gh_graphql_as_issue_type_admin \
+    -f query='
+    mutation($ownerId: ID!, $name: String!) {
+      createIssueType(input: {
+        ownerId: $ownerId
+        name: $name
+        isEnabled: true
+        description: "Deployment requests (managed by gh-deploy-control-with-issues)"
+      }) {
+        issueType { id name }
+      }
+    }' \
+    -f ownerId="$org_id" \
+    -f name="$type_name" \
+    --jq '.data.createIssueType.issueType.name'
+}
+
+sync_issue_type() {
+  local type_name org owner_typename org_id existing
+  type_name="$(cfg_issue_type)"
+  org="$(repo_owner)"
+
+  owner_typename="$(gh api graphql "${GRAPHQL_HEADERS[@]}" \
     -f query='
     query($owner: String!, $name: String!) {
       repository(owner: $owner, name: $name) {
@@ -68,25 +118,14 @@ sync_issue_type() {
         }
       }
     }' \
-    -f owner="$(repo_owner)" \
+    -f owner="$org" \
     -f name="$(repo_name)" \
     --jq '.data.repository.owner | "\(.__typename) \(.id // "")"')"
 
-  local _org_id=""
-  read -r owner_typename _org_id <<< "$owner_typename"
-  org_id="$_org_id"
+  org_id=""
+  read -r owner_typename org_id <<< "$owner_typename"
 
-  existing="$(gh_graphql \
-    -f query='
-    query($owner: String!, $name: String!) {
-      repository(owner: $owner, name: $name) {
-        issueTypes(first: 50) { nodes { id name } }
-      }
-    }' \
-    -f owner="$(repo_owner)" \
-    -f name="$(repo_name)" \
-    --jq ".data.repository.issueTypes.nodes[]? | select(.name == \"${type_name}\") | .id" 2>/dev/null || true)"
-
+  existing="$(issue_type_exists_rest "$type_name" "$org")"
   if [[ -n "$existing" ]]; then
     echo "Issue type exists: ${type_name}"
     return 0
@@ -94,33 +133,39 @@ sync_issue_type() {
 
   if [[ "$owner_typename" != "Organization" ]]; then
     echo "::warning::Issue types cannot be created automatically for user-owned repositories."
-    echo "::warning::Create Issue Type '${type_name}' manually in GitHub settings, or use the fallback label '$(cfg_fallback_trigger_label)' on deploy issues."
+    echo "::warning::Use fallback label '$(cfg_fallback_trigger_label)' on deploy issues."
     sync_fallback_trigger_label
     return 0
   fi
 
-  if [[ -z "$org_id" || "$org_id" == "null" ]]; then
-    echo "::warning::Could not resolve organization ID. Create issue type '${type_name}' manually."
+  if [[ -z "${ORG_ADMIN_TOKEN:-}" ]]; then
+    echo "::error::Cannot create Issue Type '${type_name}' in organization '${org}'."
+    echo "::error::GITHUB_TOKEN does not have admin:org permission."
+    echo "::error::Add a repository secret ORG_ADMIN_TOKEN with a PAT that has admin:org scope (org owner/admin)."
+    echo "::error::See: https://docs.github.com/en/rest/orgs/issue-types#create-issue-type-for-an-organization"
     sync_fallback_trigger_label
+    exit 1
+  fi
+
+  echo "Creating issue type '${type_name}' in organization '${org}'..."
+
+  if created="$(create_issue_type_rest "$type_name" "$org" 2>&1)"; then
+    echo "Created issue type: ${created}"
     return 0
   fi
 
-  if ! gh_graphql \
-    -f query='
-    mutation($ownerId: ID!, $name: String!) {
-      createIssueType(input: {ownerId: $ownerId, name: $name, isEnabled: true}) {
-        issueType { id name }
-      }
-    }' \
-    -f ownerId="$org_id" \
-    -f name="$type_name" \
-    --jq '.data.createIssueType.issueType.name'; then
-    echo "::warning::Failed to create issue type '${type_name}'. Ensure the workflow token has organization planning permissions."
-    sync_fallback_trigger_label
-    return 0
+  echo "REST create failed, trying GraphQL..."
+  if [[ -n "$org_id" && "$org_id" != "null" ]]; then
+    if created="$(create_issue_type_graphql "$type_name" "$org_id" 2>&1)"; then
+      echo "Created issue type: ${created}"
+      return 0
+    fi
+    echo "::error::GraphQL createIssueType failed: ${created}"
   fi
 
-  echo "Created issue type: ${type_name}"
+  echo "::error::Failed to create issue type '${type_name}'. Verify ORG_ADMIN_TOKEN has admin:org scope and you are an org administrator."
+  sync_fallback_trigger_label
+  exit 1
 }
 
 sync_labels

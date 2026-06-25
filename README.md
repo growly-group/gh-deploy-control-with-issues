@@ -60,10 +60,18 @@ services:
 Run the **Sync Deploy Resources** workflow (or push `deploy.config.yaml` to `main`):
 
 - Creates labels for each service (`frontend`, `backend`, `worker`, …)
-- **Organization repos:** creates Issue Type `Deploy` via GraphQL (requires org planning permissions)
+- **Organization repos:** creates Issue Type `Deploy` via REST API (requires secret `ORG_ADMIN_TOKEN`)
 - **User-owned repos:** Issue Types cannot be created via API — the workflow creates a fallback label `deploy` instead
 
-For personal repositories, open deploy issues with label `deploy` (or your configured `fallback_trigger_label`) plus the service labels, instead of Issue Type.
+### Organization setup (Issue Types)
+
+`GITHUB_TOKEN` **cannot** create Issue Types — it lacks `admin:org` scope. For organization repositories:
+
+1. Create a [Personal Access Token](https://github.com/settings/tokens) with **`admin:org`** scope (org owner/admin required)
+2. Add it as repository secret: **`ORG_ADMIN_TOKEN`**
+3. Run **Sync Deploy Resources** again
+
+Without `ORG_ADMIN_TOKEN`, the sync workflow fails with a clear error and creates the fallback label `deploy` so deploys can still work via label.
 
 Requires **GitHub CLI ≥ 2.94** for issue type support.
 

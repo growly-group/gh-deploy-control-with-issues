@@ -27,5 +27,6 @@ jobs:
       - name: Sync resources from config
         env:
           GH_TOKEN: ${{ github.token }}
+          ORG_ADMIN_TOKEN: ${{ secrets.ORG_ADMIN_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: bash .github/scripts/sync-resources.sh

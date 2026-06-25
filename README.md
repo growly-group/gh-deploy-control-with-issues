@@ -405,6 +405,10 @@ The legacy monolithic workflow (`cd.yml`) has been removed. See `examples/` for 
 - `yq` (installed by workflows)
 - Repository permissions: `issues: write`, `contents: read`, `deployments: write`
 
+## Credits
+
+This platform builds on the original concept and base workflow created by [**@scarletquasar**](https://github.com/scarletquasar). The open-source implementation in this repository extends and generalizes that foundation.
+
 ## License
 
 Open source — customize `deploy.config.yaml` and extend strategies for your infrastructure.

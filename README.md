@@ -132,10 +132,10 @@ Under **Settings → Secrets and variables → Actions**, create the secrets ref
 
 For **organization** repositories using Issue Type `Deploy`:
 
-| Secret | Scope | Purpose |
-|--------|-------|---------|
+| Secret            | Scope                | Purpose                                      |
+| ----------------- | -------------------- | -------------------------------------------- |
 | `ORG_ADMIN_TOKEN` | PAT with `admin:org` | Create Issue Type in the org (sync workflow) |
-| Other secrets | Deploy/infra | SSH, Cloudflare, etc. |
+| Other secrets     | Deploy/infra         | SSH, Cloudflare, etc.                        |
 
 **User-owned** repositories (personal accounts) do not need `ORG_ADMIN_TOKEN` — sync creates the `deploy` label as a fallback.
 
@@ -178,16 +178,16 @@ Replace `123` with a valid issue number (type `Deploy` + service label).
 
 ### Quick checklist
 
-| Item | Done? |
-|------|-------|
-| `.github/` and `actions/` files copied | ☐ |
-| `deploy.config.yaml` with your services | ☐ |
-| Secrets mapped in `deploy.yml` | ☐ |
-| Secrets created in the repository | ☐ |
-| `ORG_ADMIN_TOKEN` (org + Issue Type only) | ☐ |
-| Old deploy workflow disabled | ☐ |
-| Sync Deploy Resources run | ☐ |
-| Test issue with successful deploy | ☐ |
+| Item                                      | Done? |
+| ----------------------------------------- | ----- |
+| `.github/` and `actions/` files copied    | ☐     |
+| `deploy.config.yaml` with your services   | ☐     |
+| Secrets mapped in `deploy.yml`            | ☐     |
+| Secrets created in the repository         | ☐     |
+| `ORG_ADMIN_TOKEN` (org + Issue Type only) | ☐     |
+| Old deploy workflow disabled              | ☐     |
+| Sync Deploy Resources run                 | ☐     |
+| Test issue with successful deploy         | ☐     |
 
 ### Coexisting with the rest of your project
 
@@ -291,19 +291,19 @@ gh issue create \
 
 ## Reaction reference
 
-| Emoji | Meaning |
-|-------|---------|
-| 🚀 | Approve deploy |
-| 👎 | Reject deploy (closes issue) |
-| 👀 | Request manual rollback |
+| Emoji | Meaning                      |
+| ----- | ---------------------------- |
+| 🚀    | Approve deploy               |
+| 👎    | Reject deploy (closes issue) |
+| 👀    | Request manual rollback      |
 
 ## Deploy strategies
 
-| Strategy | Description | Config keys |
-|----------|-------------|-------------|
-| `ssh-docker` | SSH to host, `docker pull`, restart container | `ssh_host_secret`, `ssh_user_secret`, `ssh_key_secret`, `ssh_port_var`, `container_name` |
-| `cloudflare-pages` | Deploy static directory via Wrangler | `project_name`, `directory` (+ `CLOUDFLARE_*` secrets in workflow) |
-| `script` | Run a repository script | `script` (path relative to repo root) |
+| Strategy           | Description                                   | Config keys                                                                              |
+| ------------------ | --------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `ssh-docker`       | SSH to host, `docker pull`, restart container | `ssh_host_secret`, `ssh_user_secret`, `ssh_key_secret`, `ssh_port_var`, `container_name` |
+| `cloudflare-pages` | Deploy static directory via Wrangler          | `project_name`, `directory` (+ `CLOUDFLARE_*` secrets in workflow)                       |
+| `script`           | Run a repository script                       | `script` (path relative to repo root)                                                    |
 
 ### Adding a custom strategy
 
@@ -313,13 +313,14 @@ gh issue create \
 
 ## Workflows
 
-| Workflow | Trigger | Purpose |
-|----------|---------|---------|
-| `.github/workflows/ci.yml` | Push/PR to `main`, manual | Validate scripts and `deploy.config.yaml` |
-| `.github/workflows/sync-resources.yml` | Manual, push to `deploy.config.yaml` or sync scripts | Provision labels, issue types, and deploy issue template |
-| `.github/workflows/deploy.yml` | Issue `opened`/`labeled`, manual (with `issue_number`) | Full deploy pipeline |
+| Workflow                               | Trigger                                                | Purpose                                                  |
+| -------------------------------------- | ------------------------------------------------------ | -------------------------------------------------------- |
+| `.github/workflows/ci.yml`             | Push/PR to `main`, manual                              | Validate scripts and `deploy.config.yaml`                |
+| `.github/workflows/sync-resources.yml` | Manual, push to `deploy.config.yaml` or sync scripts   | Provision labels, issue types, and deploy issue template |
+| `.github/workflows/deploy.yml`         | Issue `opened`/`labeled`, manual (with `issue_number`) | Full deploy pipeline                                     |
 
 **Important:** deploy does **not** run on every commit. It triggers when:
+
 1. An issue receives `opened` or `labeled` (with deploy type/label + service labels), or
 2. You manually run **Deploy** in Actions with an `issue_number`.
 
@@ -387,14 +388,14 @@ deployment:
 
 ## Migration from legacy `cd.yml`
 
-| Legacy | New platform |
-|--------|--------------|
-| `[DEPLOYMENT]` title prefix | Issue Type `Deploy` |
-| Checkbox targets in issue body | Service labels from config |
-| `vars.ALLOWED_USERS_*` | `deployment.approval.users` |
-| Per-service hardcoded jobs | Dynamic matrix + strategies |
-| `curl` GitHub API calls | `gh issue comment`, `gh issue close` |
-| Inline SSH health checks | `healthcheck.sh` + config |
+| Legacy                         | New platform                         |
+| ------------------------------ | ------------------------------------ |
+| `[DEPLOYMENT]` title prefix    | Issue Type `Deploy`                  |
+| Checkbox targets in issue body | Service labels from config           |
+| `vars.ALLOWED_USERS_*`         | `deployment.approval.users`          |
+| Per-service hardcoded jobs     | Dynamic matrix + strategies          |
+| `curl` GitHub API calls        | `gh issue comment`, `gh issue close` |
+| Inline SSH health checks       | `healthcheck.sh` + config            |
 
 The legacy monolithic workflow (`cd.yml`) has been removed. See `examples/` for reference configuration.
 
@@ -408,6 +409,10 @@ The legacy monolithic workflow (`cd.yml`) has been removed. See `examples/` for 
 ## Credits
 
 This platform builds on the original concept and base workflow created by [**@scarletquasar**](https://github.com/scarletquasar). The open-source implementation in this repository extends and generalizes that foundation.
+
+<p align="center">
+  <a href="https://feitonobrasil.dev.br"><img src="https://selo.feitonobrasil.dev.br/en/branco-colorido/2x.svg" alt="Feito no Brasil" height="56"></a>
+</p>
 
 ## License
 

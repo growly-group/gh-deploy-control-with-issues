@@ -83,7 +83,7 @@ build_changelog() {
   if ! previous_sha="$(resolve_previous_sha 2>/dev/null || true)" || [[ -z "$previous_sha" ]]; then
     {
       echo "changelog_url="
-      echo "changelog_summary=Primeiro deploy registrado ou versão anterior não identificada no Git."
+      echo "changelog_summary=First deploy recorded or previous version not identified in Git."
     } >> "$GITHUB_OUTPUT"
     return 0
   fi
@@ -93,7 +93,7 @@ build_changelog() {
   if [[ "$previous_sha" == "$current_sha" ]]; then
     {
       echo "changelog_url="
-      echo "changelog_summary=Nenhuma alteração de commit entre o último deploy e este (mesmo SHA)."
+      echo "changelog_summary=No commit changes between the last deploy and this one (same SHA)."
     } >> "$GITHUB_OUTPUT"
     return 0
   fi
@@ -104,13 +104,13 @@ build_changelog() {
 
   if [[ "$commit_count" -gt "$max_commits" ]]; then
     summary+=$'\n'""
-    summary+=$'\n'"- ... e mais $((commit_count - max_commits)) commit(s). Ver o link completo."
+    summary+=$'\n'"- ... and $((commit_count - max_commits)) more commit(s). See the full compare link."
   fi
 
   echo "changelog_url=${compare_url}" >> "$GITHUB_OUTPUT"
   {
     echo "changelog_summary<<EOF"
-    echo "${commit_count} commit(s) desde o último deploy:"
+    echo "${commit_count} commit(s) since last deploy:"
     echo ""
     echo "${summary}"
     echo "EOF"

@@ -5,6 +5,11 @@
 #   IMAGE         - container image to deploy (or rollback target when ROLLBACK_MODE=true)
 #   ROLLBACK_MODE - "true" when executing a rollback
 #   PREVIOUS_REF  - previous image reference (when available)
+#
+# Optional: record refs for rollback/changelog (read after script exits successfully):
+#   echo "$PREVIOUS_REF" > "/tmp/deploy-previous-ref-${SERVICE}"
+#   echo "$DEPLOYED_REF" > "/tmp/deploy-deployed-ref-${SERVICE}"
+# If absent, deployed_ref falls back to IMAGE.
 set -euo pipefail
 
 echo "Deploying service=${SERVICE} image=${IMAGE} rollback=${ROLLBACK_MODE:-false}"

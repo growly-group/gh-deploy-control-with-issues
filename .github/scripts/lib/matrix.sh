@@ -25,7 +25,7 @@ validate_deploy_issue() {
 
   if [[ "$trigger_ok" != "true" ]]; then
     audit_invalid_type "$expected_type" "$actual_type"
-    issue_comment "ℹ️ Para repositórios de usuário sem Issue Types, adicione a label \`${fallback_label}\` à issue."
+    issue_comment "ℹ️ For user-owned repositories without Issue Types, add the \`${fallback_label}\` label to the issue."
     echo "valid=false" >> "${GITHUB_OUTPUT:?GITHUB_OUTPUT required}"
     echo "reason=invalid_issue_type" >> "$GITHUB_OUTPUT"
     exit 0
@@ -33,11 +33,9 @@ validate_deploy_issue() {
 
   local services=()
   local service
-  for service in $(cfg_service_names); do
-    if echo " $labels " | grep -q " ${service} "; then
-      services+=("$service")
-    fi
-  done
+  while IFS= read -r service; do
+    [[ -n "$service" ]] && services+=("$service")
+  done < <(issue_selected_services)
 
   if [[ ${#services[@]} -eq 0 ]]; then
     audit_no_targets

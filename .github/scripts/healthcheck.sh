@@ -62,7 +62,7 @@ run_healthcheck() {
     sleep "$interval"
   done
 
-  local final_detail="GET ${url} → falhou após ${retries} tentativas. Último: ${last_detail}"
+  local final_detail="GET ${url} → failed after ${retries} attempts. Last: ${last_detail}"
   echo "status=failure" >> "$GITHUB_OUTPUT"
   write_failure_detail "$final_detail"
   audit_healthcheck "$SERVICE" "FAILED" "${retries}/${retries}"

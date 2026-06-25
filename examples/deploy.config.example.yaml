@@ -5,6 +5,7 @@
 # Schema:
 #   deployment.issue_type     - GitHub Issue Type name that triggers deploys
 #   deployment.fallback_trigger_label - Label fallback for user-owned repos
+#   deployment.issue_template - Optional strings for the generated deploy issue form
 #   deployment.rollback         - Manual (👀) and automatic rollback settings
 #   deployment.healthcheck      - Global health check defaults
 #   deployment.observability    - Failure log excerpts and success notifications
@@ -14,6 +15,7 @@
 #     image                     - Container image reference
 #     strategy                  - ssh-docker | cloudflare-pages | script
 #     config                    - Strategy-specific settings
+#     options.deploy_options    - Optional per-service checkboxes (synced to labels)
 #     healthcheck               - Per-service overrides (url, endpoint, etc.)
 
 #   deployment.approval         - Optional approval gate via 🚀 reaction
@@ -21,6 +23,15 @@
 deployment:
   issue_type: Deploy
   fallback_trigger_label: deploy
+
+  issue_template:
+    intro: |
+      Select the **services** below — labels are applied automatically when the issue is opened.
+      After opening, an authorized user approves with 🚀.
+      Reject: 👎 · Manual rollback: 👀
+    services_description: Select all services that should be deployed.
+    reason_placeholder: Deploy v1.2.0 after merging PR #42
+    notes_description: Expected rollback, dependencies, maintenance window...
 
   approval:
     enabled: true
@@ -70,6 +81,12 @@ services:
       ssh_key_secret: PRODUCTION_SSH_KEY
       ssh_port_var: PRODUCTION_SSH_PORT
       container_name: backend
+    options:
+      deploy_options:
+        - id: migrations
+          label: migrations
+          checkbox: Run database migrations
+          description: Only when this service is selected.
     healthcheck:
       url: https://api.example.com/health
 

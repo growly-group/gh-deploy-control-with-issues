@@ -8,33 +8,33 @@ source "${SCRIPT_DIR}/gh-issue.sh"
 
 audit_started() {
   local services="$1"
-  issue_comment "🟡 **Deploy iniciado** — serviços: \`${services}\`"
+  issue_comment "🟡 **Deploy started** — services: \`${services}\`"
 }
 
 audit_waiting_approval() {
   local users="$1"
-  issue_comment "⏳ **Aguardando aprovação** — reaja com 🚀 para aprovar.
+  issue_comment "⏳ **Waiting for approval** — react with 🚀 to approve.
 
-Usuários autorizados: ${users}
+Authorized users: ${users}
 
-- 🚀 Aprovar deploy
-- 👎 Reprovar deploy"
+- 🚀 Approve deploy
+- 👎 Reject deploy"
 }
 
 audit_approved() {
   local user="$1"
-  issue_comment "✅ **Deploy aprovado** por @${user}"
+  issue_comment "✅ **Deploy approved** by @${user}"
 }
 
 audit_rejected() {
   local user="$1"
-  issue_comment "❌ **Deploy reprovado** por @${user} — deploy cancelado."
+  issue_comment "❌ **Deploy rejected** by @${user} — deploy cancelled."
 }
 
 audit_deploying() {
   local service="$1"
   local image="$2"
-  issue_comment "🔧 **Implantando** \`${service}\` (\`${image}\`)"
+  issue_comment "🔧 **Deploying** \`${service}\` (\`${image}\`)"
 }
 
 audit_healthcheck() {
@@ -48,15 +48,15 @@ audit_rollback() {
   local service="$1"
   local ref="$2"
   local reason="$3"
-  local actor="${4:-automático}"
-  issue_comment "⏪ **Rollback concluído** \`${service}\` → \`${ref}\` — ${reason} (por ${actor})"
+  local actor="${4:-automatic}"
+  issue_comment "⏪ **Rollback completed** \`${service}\` → \`${ref}\` — ${reason} (by ${actor})"
 }
 
 audit_failure_detected() {
   local service="$1"
   local reason="$2"
   local detail="${3:-}"
-  local body="⚠️ **Falha detectada** em \`${service}\` — ${reason}"
+  local body="⚠️ **Failure detected** in \`${service}\` — ${reason}"
   if [[ -n "$detail" ]]; then
     body+=$'\n\n'"${detail}"
   fi
@@ -70,11 +70,11 @@ audit_rollback_triggered() {
   local failure_summary="${4:-}"
   local run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
 
-  local body="🚨 **Deploy falhou — rollback automático iniciado**
+  local body="🚨 **Deploy failed — automatic rollback started**
 
-**Motivo:** ${reason}
-**Serviços afetados:** \`${services}\`
-**Ação:** restaurando versão anterior"
+**Reason:** ${reason}
+**Affected services:** \`${services}\`
+**Action:** restoring previous version"
 
   if [[ -n "$mentions" ]]; then
     body+=$'\n\n'"${mentions}"
@@ -84,7 +84,7 @@ audit_rollback_triggered() {
     body+=$'\n\n'"${failure_summary}"
   fi
 
-  body+=$'\n\n'"**Logs completos:** ${run_url}"
+  body+=$'\n\n'"**Full logs:** ${run_url}"
   issue_comment "$body"
 }
 
@@ -92,21 +92,21 @@ audit_rollback_started() {
   local service="$1"
   local previous_ref="$2"
   local failed_ref="$3"
-  issue_comment "🔄 **Iniciando rollback** \`${service}\` — restaurando \`${previous_ref}\` (falha em \`${failed_ref}\`)"
+  issue_comment "🔄 **Starting rollback** \`${service}\` — restoring \`${previous_ref}\` (failed at \`${failed_ref}\`)"
 }
 
 audit_rollback_skipped() {
   local service="$1"
   local reason="$2"
-  issue_comment "⏭️ **Rollback ignorado** para \`${service}\` — ${reason}"
+  issue_comment "⏭️ **Rollback skipped** for \`${service}\` — ${reason}"
 }
 
 audit_rollback_failed() {
   local service="$1"
   local ref="$2"
   local error="$3"
-  local actor="${4:-automático}"
-  issue_comment "❌ **Rollback falhou** em \`${service}\` → \`${ref}\` (por ${actor})
+  local actor="${4:-automatic}"
+  issue_comment "❌ **Rollback failed** for \`${service}\` → \`${ref}\` (by ${actor})
 
 \`\`\`
 ${error}
@@ -122,22 +122,22 @@ audit_rollback_summary() {
   local body
   case "$outcome" in
     restored)
-      body="✅ **Deploy falhou, ambiente restaurado**
+      body="✅ **Deploy failed, environment restored**
 
-O deploy não foi concluído com sucesso, mas o rollback automático restaurou a versão anterior."
+The deploy did not complete successfully, but automatic rollback restored the previous version."
       ;;
     failed)
-      body="💥 **Deploy e rollback falharam**
+      body="💥 **Deploy and rollback failed**
 
-O deploy falhou e o rollback automático também não foi bem-sucedido. **Intervenção manual necessária.**"
+The deploy failed and automatic rollback was also unsuccessful. **Manual intervention required.**"
       ;;
     partial)
-      body="⚠️ **Deploy falhou — rollback parcial**
+      body="⚠️ **Deploy failed — partial rollback**
 
-Alguns serviços foram restaurados; outros falharam ou não tinham versão anterior registrada."
+Some services were restored; others failed or had no previous version recorded."
       ;;
     *)
-      body="💥 **Deploy falhou**"
+      body="💥 **Deploy failed**"
       ;;
   esac
 
@@ -149,12 +149,12 @@ Alguns serviços foram restaurados; outros falharam ou não tinham versão anter
     body+=$'\n\n'"${details}"
   fi
 
-  body+=$'\n\n'"**Logs completos:** ${run_url}"
+  body+=$'\n\n'"**Full logs:** ${run_url}"
   issue_comment "$body"
 }
 
 audit_success() {
-  issue_comment "✅ **Deploy concluído com sucesso**"
+  issue_comment "✅ **Deploy completed successfully**"
 }
 
 audit_success_notify() {
@@ -164,50 +164,50 @@ audit_success_notify() {
   local changelog_summary="${4:-}"
   local run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
 
-  local body="🎉 **Deploy concluído com sucesso**
+  local body="🎉 **Deploy completed successfully**
 
-**Serviços implantados:** \`${services}\`"
+**Deployed services:** \`${services}\`"
 
   if [[ -n "$mentions" ]]; then
     body+=$'\n\n'"${mentions}"
   fi
 
   if [[ -n "$changelog_url" ]]; then
-    body+=$'\n\n'"**Changelog (diff entre deploys):** ${changelog_url}"
+    body+=$'\n\n'"**Changelog (diff between deploys):** ${changelog_url}"
   fi
 
   if [[ -n "$changelog_summary" ]]; then
     body+=$'\n\n'"<details>"
-    body+=$'\n'"<summary>Resumo das mudanças</summary>"
+    body+=$'\n'"<summary>Summary of changes</summary>"
     body+=$'\n'""
     body+=$'\n'"${changelog_summary}"
     body+=$'\n'""
     body+=$'\n'"</details>"
   fi
 
-  body+=$'\n\n'"**Logs do deploy:** ${run_url}"
+  body+=$'\n\n'"**Deploy logs:** ${run_url}"
   issue_comment "$body"
 }
 
 audit_failure() {
   local reason="$1"
-  issue_comment "💥 **Deploy falhou** — ${reason}
+  issue_comment "💥 **Deploy failed** — ${reason}
 
-Ver logs: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+View logs: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
 }
 
 audit_no_targets() {
-  issue_comment "⚠️ **Nenhum serviço identificado** — adicione labels correspondentes aos serviços configurados em \`deploy.config.yaml\`."
+  issue_comment "⚠️ **No deploy targets identified** — select services in the issue form or add labels matching \`deploy.config.yaml\` service keys."
 }
 
 audit_invalid_type() {
   local expected="$1"
   local actual="$2"
-  issue_comment "⚠️ **Issue type inválido** — esperado: \`${expected}\`, atual: \`${actual:-nenhum}\`."
+  issue_comment "⚠️ **Invalid issue type** — expected: \`${expected}\`, actual: \`${actual:-none}\`."
 }
 
 audit_state_recorded() {
   local service="$1"
   local previous_ref="$2"
-  issue_comment "📋 **Estado registrado** \`${service}\` — versão anterior: \`${previous_ref}\`"
+  issue_comment "📋 **State recorded** \`${service}\` — previous version: \`${previous_ref}\`"
 }

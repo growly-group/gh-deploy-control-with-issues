@@ -67,16 +67,80 @@ sync_labels() {
   done
 }
 
+sync_optional_labels() {
+  local service option_id label
+  for service in $(cfg_service_names); do
+    while IFS= read -r option_id; do
+      [[ -z "$option_id" ]] && continue
+      label="$(cfg_deploy_option_label "$service" "$option_id")"
+      [[ -n "$label" && "$label" != "null" ]] || continue
+      ensure_label "$label" "Deploy option (${service}): ${option_id}"
+    done < <(cfg_service_deploy_option_ids "$service")
+  done
+}
+
 sync_fallback_trigger_label() {
   local fallback
   fallback="$(cfg_fallback_trigger_label)"
   ensure_label "$fallback" "Triggers deployment workflow (fallback when Issue Types are unavailable)"
 }
 
+issue_type_exists_graphql() {
+  local type_name="$1"
+  local org="$2"
+  gh api graphql "${GRAPHQL_HEADERS[@]}" \
+    -f query='
+    query($org: String!) {
+      organization(login: $org) {
+        issueTypes(first: 25) {
+          nodes {
+            name
+            isEnabled
+          }
+        }
+      }
+    }' \
+    -f org="$org" \
+    --jq --arg typeName "$type_name" '
+      [.data.organization.issueTypes.nodes[]
+        | select(.name == $typeName and .isEnabled == true)
+        | .name][0] // empty' 2>/dev/null || true
+}
+
 issue_type_exists_rest() {
   local type_name="$1"
   local org="$2"
-  gh_as_issue_type_admin api "orgs/${org}/issue-types" --jq ".[] | select(.name == \"${type_name}\") | .id" 2>/dev/null || true
+  local response found
+
+  if ! response="$(gh_as_issue_type_admin api "orgs/${org}/issue-types" 2>/dev/null)"; then
+    return 1
+  fi
+  if ! echo "$response" | jq -e 'type == "array"' >/dev/null 2>&1; then
+    return 1
+  fi
+
+  found="$(echo "$response" | jq -r --arg name "$type_name" '
+    [.[] | select(.name == $name and .is_enabled == true) | .id][0] // empty')"
+  [[ -n "$found" ]]
+}
+
+issue_type_exists() {
+  local type_name="$1"
+  local org="$2"
+  local found
+
+  found="$(issue_type_exists_graphql "$type_name" "$org")"
+  if [[ -n "$found" ]]; then
+    echo "$found"
+    return 0
+  fi
+
+  if issue_type_exists_rest "$type_name" "$org"; then
+    echo "$type_name"
+    return 0
+  fi
+
+  return 1
 }
 
 create_issue_type_rest() {
@@ -132,7 +196,7 @@ sync_issue_type() {
   org_id=""
   read -r owner_typename org_id <<< "$owner_typename"
 
-  existing="$(issue_type_exists_rest "$type_name" "$org")"
+  existing="$(issue_type_exists "$type_name" "$org" || true)"
   if [[ -n "$existing" ]]; then
     echo "Issue type exists: ${type_name}"
     return 0
@@ -158,19 +222,29 @@ sync_issue_type() {
 
   if created="$(create_issue_type_rest "$type_name" "$org" 2>&1)"; then
     echo "Created issue type: ${created}"
+  else
+    echo "REST create failed, trying GraphQL..."
+    if [[ -n "$org_id" && "$org_id" != "null" ]]; then
+      if created="$(create_issue_type_graphql "$type_name" "$org_id" 2>&1)"; then
+        echo "Created issue type: ${created}"
+      else
+        echo "::error::GraphQL createIssueType failed: ${created}"
+        sync_fallback_trigger_label
+        exit 1
+      fi
+    else
+      echo "::error::Failed to create issue type '${type_name}' via REST: ${created}"
+      sync_fallback_trigger_label
+      exit 1
+    fi
+  fi
+
+  if [[ -n "$(issue_type_exists "$type_name" "$org" || true)" ]]; then
+    echo "Verified issue type: ${type_name}"
     return 0
   fi
 
-  echo "REST create failed, trying GraphQL..."
-  if [[ -n "$org_id" && "$org_id" != "null" ]]; then
-    if created="$(create_issue_type_graphql "$type_name" "$org_id" 2>&1)"; then
-      echo "Created issue type: ${created}"
-      return 0
-    fi
-    echo "::error::GraphQL createIssueType failed: ${created}"
-  fi
-
-  echo "::error::Failed to create issue type '${type_name}'. Verify ORG_ADMIN_TOKEN has admin:org scope and you are an org administrator."
+  echo "::error::Issue type '${type_name}' was not found after creation attempt."
   sync_fallback_trigger_label
   exit 1
 }
@@ -178,7 +252,7 @@ sync_issue_type() {
 sync_issue_template() {
   local template_dir=".github/ISSUE_TEMPLATE"
   local template_file="${template_dir}/deploy.yml"
-  local type_name fallback service
+  local type_name fallback service option_id intro_line checkbox description
 
   type_name="$(cfg_issue_type)"
   fallback="$(cfg_fallback_trigger_label)"
@@ -197,15 +271,19 @@ sync_issue_template() {
       "body:" \
       "  - type: markdown" \
       "    attributes:" \
-      "      value: |" \
-      "        Select the services to deploy. After opening this issue, an authorized user can approve with 🚀." \
-      "        Reject: 👎 · Manual rollback: 👀" \
+      "      value: |"
+
+    while IFS= read -r intro_line || [[ -n "$intro_line" ]]; do
+      printf '        %s\n' "$intro_line"
+    done < <(cfg_issue_template_intro | sed -e :a -e '/^\s*$/{$d;N;ba' -e '}')
+
+    printf '%s\n' \
       "" \
       "  - type: checkboxes" \
       "    id: services" \
       "    attributes:" \
       "      label: Services" \
-      "      description: Select all services that should be deployed." \
+      "      description: $(cfg_issue_template_services_description)" \
       "      options:"
 
     for service in $(cfg_service_names); do
@@ -214,14 +292,36 @@ sync_issue_template() {
 
     printf '%s\n' \
       "    validations:" \
-      "      required: true" \
+      "      required: true"
+
+    for service in $(cfg_service_names); do
+      if ! cfg_service_has_deploy_options "$service"; then
+        continue
+      fi
+      while IFS= read -r option_id; do
+        [[ -z "$option_id" ]] && continue
+        checkbox="$(cfg_deploy_option_checkbox "$service" "$option_id")"
+        description="$(cfg_deploy_option_description "$service" "$option_id")"
+        printf '%s\n' \
+          "" \
+          "  - type: checkboxes" \
+          "    id: ${service}-options-${option_id}" \
+          "    attributes:" \
+          "      label: ${service} — ${option_id}" \
+          "      description: ${description}" \
+          "      options:" \
+          "        - label: ${checkbox}"
+      done < <(cfg_service_deploy_option_ids "$service")
+    done
+
+    printf '%s\n' \
       "" \
       "  - type: textarea" \
       "    id: reason" \
       "    attributes:" \
       "      label: Reason / context" \
       "      description: PR, release, hotfix, etc." \
-      '      placeholder: "Deploy v1.2.0 after merging PR #42"' \
+      "      placeholder: \"$(cfg_issue_template_reason_placeholder)\"" \
       "    validations:" \
       "      required: true" \
       "" \
@@ -229,7 +329,7 @@ sync_issue_template() {
       "    id: notes" \
       "    attributes:" \
       "      label: Notes (optional)" \
-      "      description: Expected rollback, dependencies, maintenance window..."
+      "      description: $(cfg_issue_template_notes_description)"
   } > "$template_file"
 
   echo "Generated issue template: ${template_file}"
@@ -241,5 +341,7 @@ if [[ "$TEMPLATE_ONLY" == true ]]; then
 fi
 
 sync_labels
+sync_optional_labels
+sync_fallback_trigger_label
 sync_issue_type
 sync_issue_template

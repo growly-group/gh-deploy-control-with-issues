@@ -23,6 +23,12 @@ permissions:
 jobs:
   setup:
     name: Validate and build matrix
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'issues' && (
+        github.event.action == 'opened' ||
+        github.actor != 'github-actions[bot]'
+      ))
     runs-on: ubuntu-latest
     outputs:
       valid: ${{ steps.validate.outputs.valid }}
@@ -43,6 +49,13 @@ jobs:
         run: |
           sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
           sudo chmod +x /usr/local/bin/yq
+
+      - name: Sync labels from issue form
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ github.event.issue.number || github.event.inputs.issue_number }}
+        run: bash .github/scripts/sync-issue-from-form.sh
 
       - name: Validate deployment issue
         id: validate
@@ -121,7 +134,7 @@ jobs:
             echo "approved=false" >> "$GITHUB_OUTPUT"
             exit 1
           else
-            audit_failure "timeout aguardando aprovação"
+            audit_failure "timeout waiting for approval"
             echo "approved=false" >> "$GITHUB_OUTPUT"
             exit "$code"
           fi
@@ -139,6 +152,9 @@ jobs:
     env:
       # Map secrets referenced in deploy.config.yaml to the job environment.
       # Extend this block when your config references additional secret names.
+      GH_TOKEN: ${{ github.token }}
+      GITHUB_REPOSITORY: ${{ github.repository }}
+      ISSUE_NUMBER: ${{ github.event.issue.number || github.event.inputs.issue_number }}
       PRODUCTION_SSH_HOST: ${{ secrets.PRODUCTION_SSH_HOST }}
       PRODUCTION_SSH_USERNAME: ${{ secrets.PRODUCTION_SSH_USERNAME }}
       PRODUCTION_SSH_KEY: ${{ secrets.PRODUCTION_SSH_KEY }}
@@ -365,7 +381,7 @@ jobs:
             "${{ matrix.service }}" \
             "$PREVIOUS_REF" \
             "deploy or health check failed" \
-            "automático" \
+            "automatic" \
             "$DEPLOYED_REF"
 
       - name: Upload rollback result artifact
@@ -552,11 +568,12 @@ jobs:
                 || gh label edit "deploy:rolled-back" --description "Deploy failed but environment was rolled back" 2>/dev/null \
                 || true
               gh issue edit "${{ github.event.issue.number || github.event.inputs.issue_number }}" --add-label "deploy:rolled-back"
+              gh issue close "${{ github.event.issue.number || github.event.inputs.issue_number }}"
             elif [[ "$ROLLBACK_RESULT" == "failure" ]]; then
               audit_rollback_summary "failed" "$mentions" "$failure_summary"
             else
               audit_rollback_summary "partial" "$mentions" "$failure_summary"
             fi
           else
-            audit_failure "um ou mais serviços falharam no deploy ou health check"
+            audit_failure "one or more services failed during deploy or health check"
           fi

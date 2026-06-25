@@ -6,6 +6,7 @@ Open source deployment platform for GitHub Actions. Trigger production deploys f
 
 - **Centralized configuration** in `deploy.config.yaml` — no hardcoded service names in workflows
 - **Label-based deploy targets** — each service key becomes a GitHub label
+- **Issue form → label sync** — service checkboxes and optional deploy options are applied as labels automatically
 - **Pluggable deploy strategies** per service: `ssh-docker`, `cloudflare-pages`, `script`
 - **Approval gate** via 🚀 reaction from authorized users
 - **Rejection** via 👎 reaction
@@ -272,7 +273,7 @@ env:
 Use the **Deploy** issue template (generated from `deploy.config.yaml` by the sync workflow):
 
 1. **New issue** → **Deploy**
-2. Select the service labels and fill in context
+2. Check the services to deploy (labels are synced automatically when the workflow starts)
 3. The template sets **Issue Type** `Deploy` (org) and label `deploy` (fallback)
 4. If approval is enabled, an authorized user reacts with 🚀
 
@@ -305,6 +306,15 @@ gh issue create \
 | `cloudflare-pages` | Deploy static directory via Wrangler          | `project_name`, `directory` (+ `CLOUDFLARE_*` secrets in workflow)                       |
 | `script`           | Run a repository script                       | `script` (path relative to repo root)                                                    |
 
+Script strategy scripts may record refs for rollback/changelog by writing to temp files before exit:
+
+```bash
+echo "$PREVIOUS_REF" > "/tmp/deploy-previous-ref-${SERVICE}"
+echo "$DEPLOYED_REF" > "/tmp/deploy-deployed-ref-${SERVICE}"
+```
+
+If these files are absent, `deployed_ref` falls back to the `IMAGE` input.
+
 ### Adding a custom strategy
 
 1. Create `actions/deploy-<name>/action.yml` with outputs: `previous_ref`, `deployed_ref`, `deploy_status`, `failure_detail`
@@ -316,6 +326,7 @@ gh issue create \
 | Workflow                               | Trigger                                                | Purpose                                                  |
 | -------------------------------------- | ------------------------------------------------------ | -------------------------------------------------------- |
 | `.github/workflows/ci.yml`             | Push/PR to `main`, manual                              | Validate scripts and `deploy.config.yaml`                |
+| `.github/workflows/validate-deploy.yml`| Push/PR (deploy paths), manual                         | Validate deploy platform files and generated issue template |
 | `.github/workflows/sync-resources.yml` | Manual, push to `deploy.config.yaml` or sync scripts   | Provision labels, issue types, and deploy issue template |
 | `.github/workflows/deploy.yml`         | Issue `opened`/`labeled`, manual (with `issue_number`) | Full deploy pipeline                                     |
 
@@ -324,7 +335,52 @@ gh issue create \
 1. An issue receives `opened` or `labeled` (with deploy type/label + service labels), or
 2. You manually run **Deploy** in Actions with an `issue_number`.
 
-Every push to `main` runs **CI** to validate the repository.
+Every push to `main` runs **CI** to validate the repository. Changes under deploy paths also trigger **Validate Deploy** (path-filtered).
+
+## Issue form and label sync
+
+GitHub issue forms do **not** map checkboxes to labels automatically. When a deploy issue triggers the workflow:
+
+1. **Sync labels from issue form** reads checked service boxes (and optional deploy-option boxes) from the issue body
+2. Missing labels are created and applied before validation
+3. A **bot loop guard** on the `setup` job skips re-runs when `github-actions[bot]` adds labels (prevents infinite deploy loops)
+
+You can still add service labels manually or via CLI — both labels and checked boxes are recognized.
+
+### Optional `deployment.issue_template`
+
+Customize strings in `deploy.config.yaml`; **Sync Deploy Resources** regenerates `.github/ISSUE_TEMPLATE/deploy.yml`:
+
+```yaml
+deployment:
+  issue_template:
+    intro: |
+      Multi-line markdown shown at the top of the deploy form.
+    services_description: Select all services that should be deployed.
+    reason_placeholder: Deploy v1.2.0 after merging PR #42
+    notes_description: Expected rollback, dependencies, maintenance window...
+```
+
+### Optional per-service deploy options
+
+Generalize optional steps (e.g. database migrations) with `options.deploy_options`:
+
+```yaml
+services:
+  backend:
+    options:
+      deploy_options:
+        - id: migrations
+          label: migrations          # GitHub label applied when checked
+          checkbox: Run database migrations
+          description: Only when this service is selected.
+```
+
+Deploy scripts can read the corresponding label on the issue to decide whether to run the option.
+
+## Composite action output handling
+
+The deploy router (`actions/deploy/action.yml`) maps strategy outputs directly instead of re-emitting them through a `collect` step. Plain `echo key=value` breaks `GITHUB_OUTPUT` when `failure_detail` contains `|`, `#`, or multi-line Docker logs, and empty multiline heredocs can fail the step even on success. Strategy steps use `continue-on-error: true`; a final **Verify deploy status** step fails the action only when deploy status is `failure` or missing.
 
 ## Architecture
 
@@ -348,7 +404,7 @@ When a deploy or health check fails and automatic rollback is enabled:
 3. **Log excerpt** from failed workflow steps via `gh run view --log-failed`
 4. **Per-service rollback updates** as each service is restored
 5. **Final summary** distinguishing:
-   - Environment restored (`deploy:rolled-back` label, issue stays open)
+   - Environment restored (`deploy:rolled-back` label, issue closed automatically)
    - Rollback also failed (manual intervention required)
    - Partial rollback (some services could not be restored)
 
@@ -391,7 +447,7 @@ deployment:
 | Legacy                         | New platform                         |
 | ------------------------------ | ------------------------------------ |
 | `[DEPLOYMENT]` title prefix    | Issue Type `Deploy`                  |
-| Checkbox targets in issue body | Service labels from config           |
+| Checkbox targets in issue body | Service labels from config (auto-synced from form) |
 | `vars.ALLOWED_USERS_*`         | `deployment.approval.users`          |
 | Per-service hardcoded jobs     | Dynamic matrix + strategies          |
 | `curl` GitHub API calls        | `gh issue comment`, `gh issue close` |

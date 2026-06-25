@@ -38,7 +38,7 @@ cfg_approval_enabled() {
 }
 
 cfg_approval_users() {
-  cfg '.deployment.approval.users[]? // empty'
+  cfg '.deployment.approval.users // [] | .[]'
 }
 
 cfg_rollback_enabled() {
@@ -121,6 +121,61 @@ cfg_service_healthcheck_url() {
 cfg_service_healthcheck_endpoint() {
   local service="$1"
   cfg ".services.${service}.healthcheck.endpoint // \"\""
+}
+
+cfg_service_deploy_option_ids() {
+  local service="$1"
+  cfg ".services.${service}.options.deploy_options // [] | .[].id"
+}
+
+cfg_deploy_option_label() {
+  local service="$1"
+  local option_id="$2"
+  cfg ".services.${service}.options.deploy_options[] | select(.id == \"${option_id}\") | .label // .id"
+}
+
+cfg_deploy_option_checkbox() {
+  local service="$1"
+  local option_id="$2"
+  cfg ".services.${service}.options.deploy_options[] | select(.id == \"${option_id}\") | .checkbox // .label // .id"
+}
+
+cfg_deploy_option_description() {
+  local service="$1"
+  local option_id="$2"
+  cfg ".services.${service}.options.deploy_options[] | select(.id == \"${option_id}\") | .description // \"\""
+}
+
+cfg_service_has_deploy_options() {
+  local service="$1"
+  local id
+  id="$(cfg_service_deploy_option_ids "$service" | head -1)"
+  [[ -n "$id" && "$id" != "null" ]]
+}
+
+cfg_issue_template_intro() {
+  local intro
+  intro="$(cfg '.deployment.issue_template.intro // ""')"
+  if [[ -z "$intro" || "$intro" == "null" ]]; then
+    printf '%s\n' \
+      "Select the services to deploy. Service labels are applied automatically when the issue is opened." \
+      "After opening, an authorized user can approve with 🚀." \
+      "Reject: 👎 · Manual rollback: 👀"
+  else
+    echo "$intro"
+  fi
+}
+
+cfg_issue_template_services_description() {
+  cfg '.deployment.issue_template.services_description // "Select all services that should be deployed."'
+}
+
+cfg_issue_template_reason_placeholder() {
+  cfg '.deployment.issue_template.reason_placeholder // "Deploy v1.2.0 after merging PR #42"'
+}
+
+cfg_issue_template_notes_description() {
+  cfg '.deployment.issue_template.notes_description // "Expected rollback, dependencies, maintenance window..."'
 }
 
 is_authorized_user() {

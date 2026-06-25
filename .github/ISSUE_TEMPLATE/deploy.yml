@@ -9,7 +9,8 @@ body:
   - type: markdown
     attributes:
       value: |
-        Select the services to deploy. After opening this issue, an authorized user can approve with 🚀.
+        Select the services to deploy. Service labels are applied automatically when the issue is opened.
+        After opening, an authorized user can approve with 🚀.
         Reject: 👎 · Manual rollback: 👀
 
   - type: checkboxes

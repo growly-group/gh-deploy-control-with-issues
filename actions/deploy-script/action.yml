@@ -60,10 +60,27 @@ runs:
         export SERVICE IMAGE ROLLBACK_MODE PREVIOUS_REF
 
         if ! bash "$SCRIPT_PATH" 2>/tmp/script.err; then
-          write_failure "script exited with error: $(tail -20 /tmp/script.err 2>/dev/null || echo unknown)"
+          echo "::group::Deploy script output (stderr)"
+          if [[ -s /tmp/script.err ]]; then
+            cat /tmp/script.err
+          else
+            echo "(no stderr captured)"
+          fi
+          echo "::endgroup::"
+          err_tail="$(tail -50 /tmp/script.err 2>/dev/null || echo unknown)"
+          write_failure "script exited with error: ${err_tail}"
           exit 1
         fi
 
+        if [[ -f "/tmp/deploy-previous-ref-${SERVICE}" ]]; then
+          PREVIOUS_REF="$(tr -d '[:space:]' < "/tmp/deploy-previous-ref-${SERVICE}")"
+        fi
+
+        DEPLOYED_REF="${IMAGE}"
+        if [[ -f "/tmp/deploy-deployed-ref-${SERVICE}" ]]; then
+          DEPLOYED_REF="$(tr -d '[:space:]' < "/tmp/deploy-deployed-ref-${SERVICE}")"
+        fi
+
         echo "previous_ref=${PREVIOUS_REF}" >> "$GITHUB_OUTPUT"
-        echo "deployed_ref=${IMAGE}" >> "$GITHUB_OUTPUT"
+        echo "deployed_ref=${DEPLOYED_REF}" >> "$GITHUB_OUTPUT"
         echo "deploy_status=success" >> "$GITHUB_OUTPUT"

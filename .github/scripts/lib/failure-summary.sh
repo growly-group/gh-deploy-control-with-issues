@@ -19,7 +19,7 @@ build_failure_summary() {
       service="${base#failure-log-}"
       detail="$(cat "$file")"
       summary+=$'\n'"<details>"
-      summary+=$'\n'"<summary>${service} — detalhe da falha</summary>"
+      summary+=$'\n'"<summary>${service} — failure detail</summary>"
       summary+=$'\n'""
       summary+=$'\n'"${detail}"
       summary+=$'\n'""
@@ -30,7 +30,7 @@ build_failure_summary() {
   workflow_logs="$(collect_failure_logs)"
   if [[ -n "$workflow_logs" ]]; then
     summary+=$'\n'"<details>"
-    summary+=$'\n'"<summary>Trecho dos logs do workflow</summary>"
+    summary+=$'\n'"<summary>Workflow log excerpt</summary>"
     summary+=$'\n'""
     summary+=$'\n'"\`\`\`"
     summary+=$'\n'"${workflow_logs}"

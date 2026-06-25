@@ -5,7 +5,7 @@ set -euo pipefail
 SERVICE="${1:?service name required}"
 PREVIOUS_REF="${2:?previous ref required}"
 REASON="${3:-rollback requested}"
-ACTOR="${4:-automático}"
+ACTOR="${4:-automatic}"
 FAILED_REF="${5:-unknown}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -20,7 +20,7 @@ IMAGE="$(cfg_service_field "$SERVICE" "image")"
 FAILED_REF="${FAILED_REF:-$IMAGE}"
 
 if [[ "$PREVIOUS_REF" == "unknown" || -z "$PREVIOUS_REF" ]]; then
-  audit_rollback_skipped "$SERVICE" "nenhuma versão anterior registrada"
+  audit_rollback_skipped "$SERVICE" "no previous version recorded"
   echo "rollback_status=skipped" >> "${GITHUB_OUTPUT:?GITHUB_OUTPUT required}"
   exit 0
 fi

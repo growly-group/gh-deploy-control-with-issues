@@ -64,7 +64,7 @@ EOF
     ;;
   script)
     SCRIPT_PATH="$(echo "$CONFIG_JSON" | jq -r '.script')"
-    export SERVICE IMAGE="$PREVIOUS_REF" ROLLBACK_MODE=true
+    export SERVICE IMAGE="$PREVIOUS_REF" ROLLBACK_MODE=true CONFIG_JSON
     if ! bash "$SCRIPT_PATH" 2>/tmp/rollback.err; then
       rollback_err="$(tail -20 /tmp/rollback.err 2>/dev/null || echo "script rollback failed")"
     fi

@@ -57,7 +57,7 @@ runs:
         fi
 
         PREVIOUS_REF="${PREVIOUS_REF:-unknown}"
-        export SERVICE IMAGE ROLLBACK_MODE PREVIOUS_REF
+        export SERVICE IMAGE ROLLBACK_MODE PREVIOUS_REF CONFIG_JSON
 
         if ! bash "$SCRIPT_PATH" 2>/tmp/script.err; then
           echo "::group::Deploy script output (stderr)"

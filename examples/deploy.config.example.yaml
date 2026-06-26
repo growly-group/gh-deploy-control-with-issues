@@ -95,5 +95,7 @@ services:
     strategy: script
     config:
       script: .github/deploy-scripts/worker.sh
+      # git_remote: git@github.com:org/other-repo.git  # optional, for multi-repo script deploys
+      # git_branch: main
     healthcheck:
       url: https://worker.example.com/health

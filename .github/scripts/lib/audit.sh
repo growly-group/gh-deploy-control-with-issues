@@ -6,6 +6,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/gh-issue.sh
 source "${SCRIPT_DIR}/gh-issue.sh"
 
+AUDIT_RETRY_HINT="To retry, run Actions → Deploy → Run workflow with this issue number, then react with 🚀 on the new approval comment."
+
 audit_started() {
   local services="$1"
   issue_comment "🟡 **Deploy started** — services: \`${services}\`"
@@ -134,7 +136,9 @@ The deploy failed and automatic rollback was also unsuccessful. **Manual interve
     partial)
       body="⚠️ **Deploy failed — partial rollback**
 
-Some services were restored; others failed or had no previous version recorded."
+Some services were restored; others failed or had no previous version recorded.
+
+${AUDIT_RETRY_HINT}"
       ;;
     *)
       body="💥 **Deploy failed**"
@@ -193,7 +197,34 @@ audit_failure() {
   local reason="$1"
   issue_comment "💥 **Deploy failed** — ${reason}
 
+${AUDIT_RETRY_HINT}
+
 View logs: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+}
+
+audit_partial_deploy() {
+  local deploy_succeeded="$1"
+  local deploy_failed="$2"
+  local health_failed="${3:-}"
+  local health_skipped="${4:-}"
+
+  local body="⚠️ **Partial deploy**
+
+**Deployed successfully:** \`${deploy_succeeded:-none}\`
+**Failed:** \`${deploy_failed:-none}\`"
+
+  if [[ -n "$health_failed" ]]; then
+    body+=$'\n'"**Health check failed:** \`${health_failed}\`"
+  fi
+  if [[ -n "$health_skipped" ]]; then
+    body+=$'\n'"**Health check skipped:** \`${health_skipped}\`"
+  fi
+
+  body+=$'\n\n'"Successful services were left running. Failed services may have been rolled back if automatic rollback is enabled.
+
+${AUDIT_RETRY_HINT}"
+
+  issue_comment "$body"
 }
 
 audit_no_targets() {

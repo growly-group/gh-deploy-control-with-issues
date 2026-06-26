@@ -30,7 +30,7 @@ jobs:
           while IFS= read -r file; do
             bash -n "$file"
             echo "OK $file"
-          done < <(find .github/scripts -name '*.sh' -type f | sort)
+          done < <(find .github/scripts .github/deploy-scripts -name '*.sh' -type f 2>/dev/null | sort)
 
       - name: Validate composite action metadata
         run: |

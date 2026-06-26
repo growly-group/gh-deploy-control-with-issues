@@ -191,6 +191,31 @@ issue_add_label() {
   gh issue edit "$number" --add-label "$label"
 }
 
+issue_latest_comment_created_at() {
+  local marker="$1"
+  local number="${2:-$ISSUE_NUMBER}"
+  gh api "repos/${REPO}/issues/${number}/comments" --paginate \
+    | jq -r --arg m "$marker" '[.[] | select(.body | contains($m))] | last | .created_at // empty'
+}
+
+issue_remove_user_reaction() {
+  local user="$1"
+  local content="$2"
+  local number="${3:-$ISSUE_NUMBER}"
+  local reaction_id
+
+  reaction_id="$(issue_reactions "$number" | jq -r --arg u "$user" --arg c "$content" \
+    '.[] | select(.user.login == $u and .content == $c) | .id' | head -1)"
+  [[ -n "$reaction_id" && "$reaction_id" != "null" ]] || return 0
+  gh api -X DELETE "repos/${REPO}/issues/${number}/reactions/${reaction_id}"
+}
+
+issue_remove_label() {
+  local label="$1"
+  local number="${2:-$ISSUE_NUMBER}"
+  gh issue edit "$number" --remove-label "$label"
+}
+
 issue_reactions() {
   local number="${1:-$ISSUE_NUMBER}"
   gh api "repos/${REPO}/issues/${number}/reactions" --paginate
@@ -199,5 +224,10 @@ issue_reactions() {
 reaction_users_by_content() {
   local content="$1"
   local number="${2:-$ISSUE_NUMBER}"
-  issue_reactions "$number" | jq -r --arg c "$content" '.[] | select(.content == $c) | .user.login'
+  if [[ -n "${APPROVAL_SINCE_ISO:-}" ]]; then
+    issue_reactions "$number" | jq -r --arg c "$content" --arg since "$APPROVAL_SINCE_ISO" \
+      '.[] | select(.content == $c and .created_at >= $since) | .user.login'
+  else
+    issue_reactions "$number" | jq -r --arg c "$content" '.[] | select(.content == $c) | .user.login'
+  fi
 }

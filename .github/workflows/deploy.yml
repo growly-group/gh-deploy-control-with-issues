@@ -2,7 +2,7 @@ name: Deploy
 
 on:
   issues:
-    types: [opened, labeled]
+    types: [opened]
   workflow_dispatch:
     inputs:
       issue_number:
@@ -12,7 +12,7 @@ on:
 
 concurrency:
   group: deploy-issue-${{ github.event.issue.number || github.event.inputs.issue_number }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -23,12 +23,6 @@ permissions:
 jobs:
   setup:
     name: Validate and build matrix
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'issues' && (
-        github.event.action == 'opened' ||
-        github.actor != 'github-actions[bot]'
-      ))
     runs-on: ubuntu-latest
     outputs:
       valid: ${{ steps.validate.outputs.valid }}
@@ -104,12 +98,29 @@ jobs:
           source .github/scripts/lib/audit.sh
           audit_waiting_approval "$users"
 
+      - name: Capture approval comment timestamp
+        id: approval_since
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ github.event.issue.number || github.event.inputs.issue_number }}
+        run: |
+          set -euo pipefail
+          source .github/scripts/lib/gh-issue.sh
+          since="$(issue_latest_comment_created_at "Waiting for approval")"
+          if [[ -z "$since" ]]; then
+            echo "::error::Could not find approval comment timestamp on issue." >&2
+            exit 1
+          fi
+          echo "since=${since}" >> "$GITHUB_OUTPUT"
+
       - name: Poll reactions
         id: approval
         env:
           GH_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           ISSUE_NUMBER: ${{ github.event.issue.number || github.event.inputs.issue_number }}
+          APPROVAL_SINCE_ISO: ${{ steps.approval_since.outputs.since }}
         run: |
           set -euo pipefail
           source .github/scripts/lib/gh-issue.sh
@@ -123,6 +134,7 @@ jobs:
 
           if [[ "$result" == approved:* ]]; then
             approver="${result#approved:}"
+            issue_remove_user_reaction "$approver" "rocket"
             audit_approved "$approver"
             echo "approved=true" >> "$GITHUB_OUTPUT"
             echo "approver=${approver}" >> "$GITHUB_OUTPUT"
@@ -202,21 +214,38 @@ jobs:
           path: /tmp/deploy-state/
           if-no-files-found: ignore
 
+      - name: Record deploy outcome
+        if: always()
+        run: |
+          mkdir -p /tmp/deploy-outcomes
+          if [[ "${{ steps.deploy.outputs.deploy_status }}" == "success" ]]; then
+            echo "success" > "/tmp/deploy-outcomes/deploy-outcome-${{ matrix.service }}.txt"
+          else
+            echo "failure" > "/tmp/deploy-outcomes/deploy-outcome-${{ matrix.service }}.txt"
+          fi
+
+      - name: Upload deploy outcome artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: deploy-outcome-${{ matrix.service }}
+          path: /tmp/deploy-outcomes/deploy-outcome-${{ matrix.service }}.txt
+          if-no-files-found: warn
+
       - name: Capture deploy failure detail
         if: failure()
         env:
           GH_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           ISSUE_NUMBER: ${{ github.event.issue.number || github.event.inputs.issue_number }}
+          FAILURE_DETAIL: ${{ steps.deploy.outputs.failure_detail }}
+          SERVICE: ${{ matrix.service }}
         run: |
           mkdir -p /tmp/failure-logs
-          detail="${{ steps.deploy.outputs.failure_detail }}"
-          if [[ -z "$detail" ]]; then
-            detail="Deploy step failed for ${{ matrix.service }}"
-          fi
-          printf '%s' "$detail" > /tmp/failure-logs/${{ matrix.service }}.txt
+          detail="${FAILURE_DETAIL:-Deploy step failed for ${SERVICE}}"
+          printf '%s' "$detail" > "/tmp/failure-logs/${SERVICE}.txt"
           source .github/scripts/lib/audit.sh
-          audit_failure_detected "${{ matrix.service }}" "deploy failed" "$detail"
+          audit_failure_detected "${SERVICE}" "deploy failed" "$detail"
 
       - name: Upload failure log artifact
         if: failure()
@@ -226,13 +255,45 @@ jobs:
           path: /tmp/failure-logs/${{ matrix.service }}.txt
           if-no-files-found: warn
 
+  deploy-summary:
+    name: Summarize deploy outcomes
+    needs: [setup, wait-approval, deploy]
+    if: |
+      always() &&
+      needs.setup.outputs.valid == 'true' &&
+      (needs.setup.outputs.approval_enabled != 'true' || needs.wait-approval.result == 'success')
+    runs-on: ubuntu-latest
+    outputs:
+      succeeded_services: ${{ steps.summary.outputs.succeeded_services }}
+      failed_services: ${{ steps.summary.outputs.failed_services }}
+      all_succeeded: ${{ steps.summary.outputs.all_succeeded }}
+      any_failed: ${{ steps.summary.outputs.any_failed }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download deploy outcomes
+        uses: actions/download-artifact@v4
+        with:
+          pattern: deploy-outcome-*
+          merge-multiple: true
+          path: /tmp/deploy-outcomes
+
+      - name: Summarize outcomes
+        id: summary
+        run: |
+          set -euo pipefail
+          source .github/scripts/lib/deploy-outcomes.sh
+          summarize_deploy_outcomes /tmp/deploy-outcomes "${{ needs.setup.outputs.services }}"
+
   healthcheck:
     name: Health check ${{ matrix.service }}
-    needs: [setup, deploy]
+    needs: [setup, deploy, deploy-summary]
     if: |
+      always() &&
       needs.setup.outputs.valid == 'true' &&
       needs.setup.outputs.healthcheck_enabled == 'true' &&
-      needs.deploy.result == 'success'
+      (needs.setup.outputs.approval_enabled != 'true' || needs.wait-approval.result == 'success')
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -246,30 +307,71 @@ jobs:
           sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
           sudo chmod +x /usr/local/bin/yq
 
-      - name: Run health check
+      - name: Download deploy outcomes
+        uses: actions/download-artifact@v4
+        with:
+          pattern: deploy-outcome-*
+          merge-multiple: true
+          path: /tmp/deploy-outcomes
+
+      - name: Run health check or skip
         id: health
         env:
           GH_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           ISSUE_NUMBER: ${{ github.event.issue.number || github.event.inputs.issue_number }}
-        run: bash .github/scripts/healthcheck.sh "${{ matrix.service }}"
+          SERVICE: ${{ matrix.service }}
+        run: |
+          set -euo pipefail
+          source .github/scripts/lib/deploy-outcomes.sh
+          source .github/scripts/lib/audit.sh
+
+          deploy_outcome="$(deploy_outcome_for_service /tmp/deploy-outcomes "$SERVICE")"
+          mkdir -p /tmp/health-outcomes
+
+          if [[ "$deploy_outcome" != "success" ]]; then
+            audit_healthcheck "$SERVICE" "SKIPPED" "deploy did not succeed"
+            echo "status=skipped" >> "$GITHUB_OUTPUT"
+            echo "skipped" > "/tmp/health-outcomes/health-outcome-${SERVICE}.txt"
+            exit 0
+          fi
+
+          bash .github/scripts/healthcheck.sh "$SERVICE"
+
+      - name: Record health outcome
+        if: always()
+        run: |
+          mkdir -p /tmp/health-outcomes
+          status="${{ steps.health.outputs.status }}"
+          if [[ -z "$status" ]]; then
+            status="failure"
+          fi
+          echo "$status" > "/tmp/health-outcomes/health-outcome-${{ matrix.service }}.txt"
 
       - name: Fail on unhealthy service
         if: steps.health.outputs.status == 'failure'
         run: exit 1
 
       - name: Capture health check failure detail
-        if: failure()
+        if: failure() && steps.health.outputs.status == 'failure'
+        env:
+          FAILURE_DETAIL: ${{ steps.health.outputs.failure_detail }}
+          SERVICE: ${{ matrix.service }}
         run: |
           mkdir -p /tmp/failure-logs
-          detail="${{ steps.health.outputs.failure_detail }}"
-          if [[ -z "$detail" ]]; then
-            detail="Health check failed for ${{ matrix.service }}"
-          fi
-          printf '%s' "$detail" > /tmp/failure-logs/${{ matrix.service }}.txt
+          detail="${FAILURE_DETAIL:-Health check failed for ${SERVICE}}"
+          printf '%s' "$detail" > "/tmp/failure-logs/${SERVICE}.txt"
+
+      - name: Upload health outcome artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: health-outcome-${{ matrix.service }}
+          path: /tmp/health-outcomes/health-outcome-${{ matrix.service }}.txt
+          if-no-files-found: warn
 
       - name: Upload failure log artifact
-        if: failure()
+        if: failure() && steps.health.outputs.status == 'failure'
         uses: actions/upload-artifact@v4
         with:
           name: failure-log-${{ matrix.service }}
@@ -278,13 +380,16 @@ jobs:
 
   rollback-notify:
     name: Notify rollback triggered
-    needs: [setup, deploy, healthcheck]
+    needs: [setup, deploy-summary, healthcheck]
     if: |
       always() &&
       needs.setup.outputs.valid == 'true' &&
       needs.setup.outputs.rollback_enabled == 'true' &&
       needs.setup.outputs.rollback_automatic == 'true' &&
-      (needs.deploy.result == 'failure' || needs.healthcheck.result == 'failure')
+      (
+        needs.deploy-summary.outputs.any_failed == 'true' ||
+        needs.healthcheck.result == 'failure'
+      )
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -297,6 +402,7 @@ jobs:
 
       - name: Download failure logs
         uses: actions/download-artifact@v4
+        continue-on-error: true
         with:
           pattern: failure-log-*
           merge-multiple: true
@@ -308,7 +414,7 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
           ISSUE_NUMBER: ${{ github.event.issue.number || github.event.inputs.issue_number }}
           SERVICES: ${{ needs.setup.outputs.services }}
-          DEPLOY_RESULT: ${{ needs.deploy.result }}
+          ANY_DEPLOY_FAILED: ${{ needs.deploy-summary.outputs.any_failed }}
           HEALTHCHECK_RESULT: ${{ needs.healthcheck.result }}
         run: |
           set -euo pipefail
@@ -316,9 +422,9 @@ jobs:
           source .github/scripts/lib/gh-issue.sh
 
           reason="deploy or health check failed"
-          if [[ "$DEPLOY_RESULT" == "failure" && "$HEALTHCHECK_RESULT" == "failure" ]]; then
+          if [[ "$ANY_DEPLOY_FAILED" == "true" && "$HEALTHCHECK_RESULT" == "failure" ]]; then
             reason="deploy failed and health check failed"
-          elif [[ "$DEPLOY_RESULT" == "failure" ]]; then
+          elif [[ "$ANY_DEPLOY_FAILED" == "true" ]]; then
             reason="deploy failed"
           elif [[ "$HEALTHCHECK_RESULT" == "failure" ]]; then
             reason="health check failed"
@@ -330,13 +436,16 @@ jobs:
 
   rollback:
     name: Rollback ${{ matrix.service }}
-    needs: [setup, deploy, healthcheck]
+    needs: [setup, deploy-summary, healthcheck]
     if: |
       always() &&
       needs.setup.outputs.valid == 'true' &&
       needs.setup.outputs.rollback_enabled == 'true' &&
       needs.setup.outputs.rollback_automatic == 'true' &&
-      (needs.deploy.result == 'failure' || needs.healthcheck.result == 'failure')
+      (
+        needs.deploy-summary.outputs.any_failed == 'true' ||
+        needs.healthcheck.result == 'failure'
+      )
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -355,7 +464,36 @@ jobs:
           sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
           sudo chmod +x /usr/local/bin/yq
 
+      - name: Download deploy and health outcomes
+        uses: actions/download-artifact@v4
+        with:
+          pattern: deploy-outcome-*|health-outcome-*
+          merge-multiple: true
+          path: /tmp/outcomes
+
+      - name: Check if rollback needed
+        id: needs_rollback
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ github.event.issue.number || github.event.inputs.issue_number }}
+          SERVICE: ${{ matrix.service }}
+        run: |
+          set -euo pipefail
+          source .github/scripts/lib/deploy-outcomes.sh
+          source .github/scripts/lib/audit.sh
+
+          mkdir -p /tmp/rollback-results
+          if service_needs_rollback /tmp/outcomes /tmp/outcomes "$SERVICE"; then
+            echo "needed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+            echo "skipped" > "/tmp/rollback-results/rollback-result-${SERVICE}.txt"
+            audit_rollback_skipped "$SERVICE" "service deployed successfully — no rollback needed"
+          fi
+
       - name: Download deploy state
+        if: steps.needs_rollback.outputs.needed == 'true'
         uses: actions/download-artifact@v4
         with:
           pattern: deploy-state-${{ matrix.service }}
@@ -364,6 +502,7 @@ jobs:
 
       - name: Execute rollback
         id: rollback
+        if: steps.needs_rollback.outputs.needed == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
@@ -388,27 +527,37 @@ jobs:
         if: always()
         run: |
           mkdir -p /tmp/rollback-results
-          status="${{ steps.rollback.outputs.rollback_status }}"
-          if [[ -z "$status" ]]; then
-            status="failure"
+          service="${{ matrix.service }}"
+          if [[ "${{ steps.needs_rollback.outputs.needed }}" != "true" ]]; then
+            echo "skipped" > "/tmp/rollback-results/rollback-result-${service}.txt"
+          else
+            status="${{ steps.rollback.outputs.rollback_status }}"
+            if [[ -z "$status" ]]; then
+              status="failure"
+            fi
+            echo "$status" > "/tmp/rollback-results/rollback-result-${service}.txt"
           fi
-          echo "$status" > /tmp/rollback-results/${{ matrix.service }}.txt
 
       - name: Save rollback result artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: rollback-result-${{ matrix.service }}
-          path: /tmp/rollback-results/${{ matrix.service }}.txt
+          path: /tmp/rollback-results/rollback-result-${{ matrix.service }}.txt
           if-no-files-found: warn
 
   manual-rollback:
     name: Manual rollback monitor
-    needs: [setup, deploy, healthcheck]
+    needs: [setup, deploy-summary, healthcheck]
     if: |
       needs.setup.outputs.valid == 'true' &&
       needs.setup.outputs.rollback_enabled == 'true' &&
-      needs.deploy.result == 'success'
+      needs.deploy-summary.outputs.all_succeeded == 'true' &&
+      (
+        needs.setup.outputs.healthcheck_enabled != 'true' ||
+        needs.healthcheck.result == 'success' ||
+        needs.healthcheck.result == 'skipped'
+      )
     runs-on: ubuntu-latest
     strategy:
       matrix: ${{ fromJSON(needs.setup.outputs.matrix) }}
@@ -460,7 +609,7 @@ jobs:
 
   finalize:
     name: Finalize deployment
-    needs: [setup, wait-approval, deploy, healthcheck, rollback-notify, rollback]
+    needs: [setup, wait-approval, deploy, deploy-summary, healthcheck, rollback-notify, rollback]
     if: always() && needs.setup.outputs.valid == 'true'
     runs-on: ubuntu-latest
     permissions:
@@ -478,12 +627,12 @@ jobs:
           sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
           sudo chmod +x /usr/local/bin/yq
 
-      - name: Download failure and rollback artifacts
+      - name: Download outcome artifacts
         if: always()
         uses: actions/download-artifact@v4
         continue-on-error: true
         with:
-          pattern: failure-log-*|rollback-result-*
+          pattern: deploy-outcome-*|health-outcome-*|failure-log-*|rollback-result-*
           merge-multiple: true
           path: /tmp/finalize-artifacts
 
@@ -499,10 +648,12 @@ jobs:
       - name: Build changelog
         id: changelog
         if: |
-          needs.deploy.result == 'success' &&
-          (needs.setup.outputs.healthcheck_enabled != 'true' ||
-           needs.healthcheck.result == 'success' ||
-           needs.healthcheck.result == 'skipped')
+          needs.deploy-summary.outputs.all_succeeded == 'true' &&
+          (
+            needs.setup.outputs.healthcheck_enabled != 'true' ||
+            needs.healthcheck.result == 'success' ||
+            needs.healthcheck.result == 'skipped'
+          )
         env:
           GH_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
@@ -521,59 +672,98 @@ jobs:
           ISSUE_NUMBER: ${{ github.event.issue.number || github.event.inputs.issue_number }}
           SERVICES: ${{ needs.setup.outputs.services }}
           NOTIFY_ON_SUCCESS: ${{ needs.setup.outputs.notify_on_success }}
-          DEPLOY_RESULT: ${{ needs.deploy.result }}
-          HEALTHCHECK_RESULT: ${{ needs.healthcheck.result }}
           HEALTHCHECK_ENABLED: ${{ needs.setup.outputs.healthcheck_enabled }}
           ROLLBACK_ENABLED: ${{ needs.setup.outputs.rollback_enabled }}
           ROLLBACK_AUTOMATIC: ${{ needs.setup.outputs.rollback_automatic }}
-          ROLLBACK_RESULT: ${{ needs.rollback.result }}
           CHANGELOG_URL: ${{ steps.changelog.outputs.changelog_url }}
           CHANGELOG_SUMMARY: ${{ steps.changelog.outputs.changelog_summary }}
         run: |
           set -euo pipefail
           source .github/scripts/lib/audit.sh
           source .github/scripts/lib/gh-issue.sh
+          source .github/scripts/lib/deploy-outcomes.sh
 
-          deploy_ok=false
-          if [[ "$DEPLOY_RESULT" == "success" ]]; then
-            if [[ "$HEALTHCHECK_ENABLED" != "true" || "$HEALTHCHECK_RESULT" == "success" || "$HEALTHCHECK_RESULT" == "skipped" ]]; then
-              deploy_ok=true
-            fi
-          fi
+          summarize_pipeline_outcomes \
+            /tmp/finalize-artifacts \
+            /tmp/finalize-artifacts \
+            "$SERVICES" \
+            "$HEALTHCHECK_ENABLED"
 
-          if [[ "$deploy_ok" == "true" ]]; then
-            if [[ "$NOTIFY_ON_SUCCESS" == "true" ]]; then
-              mentions="$(issue_mentions)"
-              audit_success_notify "$SERVICES" "$mentions" "$CHANGELOG_URL" "$CHANGELOG_SUMMARY"
-            fi
-            bash .github/scripts/changelog.sh record
-            gh issue close "${{ github.event.issue.number || github.event.inputs.issue_number }}"
-            exit 0
-          fi
-
+          issue_number="${{ github.event.issue.number || github.event.inputs.issue_number }}"
           mentions="$(issue_mentions)"
           failure_summary="$(bash .github/scripts/lib/failure-summary.sh /tmp/finalize-artifacts 2>/dev/null || true)"
 
+          full_success=false
+          if [[ -z "$deploy_failed" && -z "$health_failed" && -n "$deploy_succeeded" ]]; then
+            full_success=true
+          fi
+
+          partial_deploy=false
+          if [[ -n "$deploy_succeeded" && -n "$deploy_failed" ]]; then
+            partial_deploy=true
+          fi
+
+          if [[ "$full_success" == "true" ]]; then
+            if [[ "$NOTIFY_ON_SUCCESS" == "true" ]]; then
+              audit_success_notify "$SERVICES" "$mentions" "$CHANGELOG_URL" "$CHANGELOG_SUMMARY"
+            fi
+            bash .github/scripts/changelog.sh record
+            gh issue close "$issue_number"
+            exit 0
+          fi
+
+          if [[ "$partial_deploy" == "true" ]]; then
+            audit_partial_deploy "$deploy_succeeded" "$deploy_failed" "$health_failed" "$health_skipped"
+          fi
+
           rollback_ran=false
           if [[ "$ROLLBACK_ENABLED" == "true" && "$ROLLBACK_AUTOMATIC" == "true" ]]; then
-            if [[ "$DEPLOY_RESULT" == "failure" || "$HEALTHCHECK_RESULT" == "failure" ]]; then
+            if [[ -n "$deploy_failed" || -n "$health_failed" ]]; then
               rollback_ran=true
             fi
           fi
 
           if [[ "$rollback_ran" == "true" ]]; then
-            if [[ "$ROLLBACK_RESULT" == "success" ]]; then
+            rollback_failed=false
+            rollback_partial=false
+            rollback_all_restored=true
+            service deploy_outcome rollback_outcome
+
+            IFS=',' read -ra all_services <<< "$SERVICES"
+            for service in "${all_services[@]}"; do
+              [[ -z "$service" ]] && continue
+              if ! service_needs_rollback /tmp/finalize-artifacts /tmp/finalize-artifacts "$service"; then
+                continue
+              fi
+              rollback_outcome="$(rollback_outcome_for_service /tmp/finalize-artifacts "$service")"
+              case "$rollback_outcome" in
+                success) ;;
+                skipped)
+                  deploy_outcome="$(deploy_outcome_for_service /tmp/finalize-artifacts "$service")"
+                  if [[ "$deploy_outcome" != "success" ]]; then
+                    rollback_partial=true
+                    rollback_all_restored=false
+                  fi
+                  ;;
+                *)
+                  rollback_failed=true
+                  rollback_all_restored=false
+                  ;;
+              esac
+            done
+
+            if [[ "$rollback_all_restored" == "true" && -z "$deploy_succeeded" ]]; then
               audit_rollback_summary "restored" "$mentions" "$failure_summary"
+              gh issue close "$issue_number"
               gh label create "deploy:rolled-back" --description "Deploy failed but environment was rolled back" --color "FBCA04" 2>/dev/null \
                 || gh label edit "deploy:rolled-back" --description "Deploy failed but environment was rolled back" 2>/dev/null \
                 || true
-              gh issue edit "${{ github.event.issue.number || github.event.inputs.issue_number }}" --add-label "deploy:rolled-back"
-              gh issue close "${{ github.event.issue.number || github.event.inputs.issue_number }}"
-            elif [[ "$ROLLBACK_RESULT" == "failure" ]]; then
+              gh issue edit "$issue_number" --add-label "deploy:rolled-back"
+            elif [[ "$rollback_failed" == "true" ]]; then
               audit_rollback_summary "failed" "$mentions" "$failure_summary"
             else
               audit_rollback_summary "partial" "$mentions" "$failure_summary"
             fi
-          else
+          elif [[ "$partial_deploy" != "true" ]]; then
             audit_failure "one or more services failed during deploy or health check"
           fi

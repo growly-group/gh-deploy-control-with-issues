@@ -315,6 +315,12 @@ echo "$DEPLOYED_REF" > "/tmp/deploy-deployed-ref-${SERVICE}"
 
 If these files are absent, `deployed_ref` falls back to the `IMAGE` input.
 
+### Multi-repo script deploys
+
+The workflow checkout is the **control repository** (workflows, config, scripts). The deployed application may live in a different repo. Set `config.git_remote` (and optionally `config.git_branch`) in `deploy.config.yaml`; the script receives the full `config` as `CONFIG_JSON` during deploy **and** rollback.
+
+See `examples/deploy-scripts/multi-repo-git-sync.sh` for a generic git-sync pattern with marker-file validation and ref recording.
+
 ### Adding a custom strategy
 
 1. Create `actions/deploy-<name>/action.yml` with outputs: `previous_ref`, `deployed_ref`, `deploy_status`, `failure_detail`
@@ -328,22 +334,33 @@ If these files are absent, `deployed_ref` falls back to the `IMAGE` input.
 | `.github/workflows/ci.yml`             | Push/PR to `main`, manual                              | Validate scripts and `deploy.config.yaml`                |
 | `.github/workflows/validate-deploy.yml`| Push/PR (deploy paths), manual                         | Validate deploy platform files and generated issue template |
 | `.github/workflows/sync-resources.yml` | Manual, push to `deploy.config.yaml` or sync scripts   | Provision labels, issue types, and deploy issue template |
-| `.github/workflows/deploy.yml`         | Issue `opened`/`labeled`, manual (with `issue_number`) | Full deploy pipeline                                     |
+| `.github/workflows/deploy.yml`         | Issue `opened`, manual (with `issue_number`)           | Full deploy pipeline                                     |
 
 **Important:** deploy does **not** run on every commit. It triggers when:
 
-1. An issue receives `opened` or `labeled` (with deploy type/label + service labels), or
-2. You manually run **Deploy** in Actions with an `issue_number`.
+1. A deploy issue is **opened** (one run per issue — not on `labeled` events), or
+2. You manually run **Deploy** in Actions with an `issue_number` input (for retries).
 
 Every push to `main` runs **CI** to validate the repository. Changes under deploy paths also trigger **Validate Deploy** (path-filtered).
 
+### Retrying a deploy
+
+`labeled` events no longer trigger the workflow (this prevents duplicate runs when the bot syncs service labels). To retry after a failure or partial deploy:
+
+1. Open **Actions → Deploy → Run workflow**
+2. Enter the **issue number**
+3. If approval is enabled, react with 🚀 on the **new** "Waiting for approval" comment (only reactions after that comment count; old 🚀 reactions are ignored)
+
+Concurrency is set to `cancel-in-progress: true` — a new run cancels any in-progress run for the same issue.
+
 ## Issue form and label sync
 
-GitHub issue forms do **not** map checkboxes to labels automatically. When a deploy issue triggers the workflow:
+GitHub issue forms do **not** map checkboxes to labels automatically. When a deploy issue is opened:
 
 1. **Sync labels from issue form** reads checked service boxes (and optional deploy-option boxes) from the issue body
 2. Missing labels are created and applied before validation
-3. A **bot loop guard** on the `setup` job skips re-runs when `github-actions[bot]` adds labels (prevents infinite deploy loops)
+
+Label sync does **not** re-trigger the workflow — only `opened` and `workflow_dispatch` start a deploy run.
 
 You can still add service labels manually or via CLI — both labels and checked boxes are recognized.
 
@@ -386,14 +403,25 @@ The deploy router (`actions/deploy/action.yml`) maps strategy outputs directly i
 
 ```
 Issue (Type: Deploy + labels)
-  → setup (validate + matrix)
-  → wait-approval (optional, poll 🚀/👎)
-  → deploy (matrix per service → strategy action)
-  → healthcheck (matrix)
+  → setup (sync labels + validate + matrix)
+  → wait-approval (optional, poll 🚀/👎 after approval comment timestamp)
+  → deploy (matrix per service → strategy action → per-service outcome artifact)
+  → deploy-summary (aggregate succeeded/failed services)
+  → healthcheck (matrix, gated per service deploy outcome)
   → rollback-notify (comment on issue with failure details + @mentions)
-  → rollback (automatic on failure)
-  → finalize (success notification + changelog + close issue)
+  → rollback (per service, only when that service failed)
+  → finalize (per-service outcomes → success / partial / rollback summary)
 ```
+
+### Partial deploy handling
+
+When deploying multiple services (`fail-fast: false`), each service is tracked independently:
+
+- **Backend OK + frontend fail** → backend stays deployed; only frontend is rolled back
+- Issue stays **open** with a partial deploy comment listing succeeded vs failed services
+- Automatic rollback runs only for services that failed deploy or health check
+
+Full success closes the issue. Full failure with successful rollback closes the issue and adds `deploy:rolled-back`.
 
 ## Rollback notifications
 
@@ -447,7 +475,8 @@ deployment:
 | Legacy                         | New platform                         |
 | ------------------------------ | ------------------------------------ |
 | `[DEPLOYMENT]` title prefix    | Issue Type `Deploy`                  |
-| Checkbox targets in issue body | Service labels from config (auto-synced from form) |
+| Checkbox targets in issue body | Service labels from config (auto-synced on issue open) |
+| Re-trigger on label change     | `workflow_dispatch` with `issue_number` (retry flow)   |
 | `vars.ALLOWED_USERS_*`         | `deployment.approval.users`          |
 | Per-service hardcoded jobs     | Dynamic matrix + strategies          |
 | `curl` GitHub API calls        | `gh issue comment`, `gh issue close` |

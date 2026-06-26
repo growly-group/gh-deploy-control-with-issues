@@ -25,6 +25,28 @@ GIT_REMOTE="${GIT_REMOTE:-$(echo "$CONFIG_JSON" | jq -r '.git_remote // empty')}
 GIT_BRANCH="${GIT_BRANCH:-$(echo "$CONFIG_JSON" | jq -r '.git_branch // "main"')}"
 MARKER_FILE="${MARKER_FILE:-$(echo "$CONFIG_JSON" | jq -r '.marker_file // empty')}"
 
+ensure_git_origin() {
+  local remote="$1"
+  if git -C "$WORKDIR" remote get-url origin &>/dev/null; then
+    git -C "$WORKDIR" remote set-url origin "$remote"
+  else
+    git -C "$WORKDIR" remote add origin "$remote"
+  fi
+}
+
+safe_rollback_reset() {
+  local ref="$1"
+  local branch="$2"
+
+  git -C "$WORKDIR" fetch origin
+  if git -C "$WORKDIR" merge-base --is-ancestor "$ref" "origin/${branch}" 2>/dev/null; then
+    git -C "$WORKDIR" reset --hard "$ref"
+  else
+    echo "::warning::Rollback ref ${ref} not on origin/${branch}; using origin/${branch}"
+    git -C "$WORKDIR" reset --hard "origin/${branch}"
+  fi
+}
+
 resolve_marker() {
   if [[ -n "$MARKER_FILE" && "$MARKER_FILE" != "null" ]]; then
     echo "$MARKER_FILE"
@@ -47,13 +69,21 @@ record_refs() {
 
 if [[ "${ROLLBACK_MODE:-false}" == "true" ]]; then
   target_ref="${IMAGE}"
-  if [[ -d "$WORKDIR/.git" ]]; then
-    git -C "$WORKDIR" reset --hard "$target_ref"
-    echo "Rolled back ${SERVICE} to ${target_ref}"
-    exit 0
+  if [[ ! -d "$WORKDIR/.git" ]]; then
+    echo "::error::Rollback workdir not found: ${WORKDIR}" >&2
+    exit 1
   fi
-  echo "::error::Rollback workdir not found: ${WORKDIR}" >&2
-  exit 1
+  if [[ -n "$GIT_REMOTE" && "$GIT_REMOTE" != "null" ]]; then
+    ensure_git_origin "$GIT_REMOTE"
+  fi
+  safe_rollback_reset "$target_ref" "$GIT_BRANCH"
+  marker="$(resolve_marker)"
+  if [[ ! -f "${WORKDIR}/${marker}" ]]; then
+    echo "::error::Expected marker file missing after rollback: ${WORKDIR}/${marker}" >&2
+    exit 1
+  fi
+  echo "Rolled back ${SERVICE} to $(git -C "$WORKDIR" rev-parse HEAD)"
+  exit 0
 fi
 
 PREVIOUS_REF="${PREVIOUS_REF:-unknown}"
@@ -66,7 +96,7 @@ if [[ -n "$GIT_REMOTE" && "$GIT_REMOTE" != "null" ]]; then
     mkdir -p "$WORKDIR"
     git clone "$GIT_REMOTE" "$WORKDIR"
   else
-    git -C "$WORKDIR" remote set-url origin "$GIT_REMOTE"
+    ensure_git_origin "$GIT_REMOTE"
   fi
   git -C "$WORKDIR" fetch origin "$GIT_BRANCH"
   git -C "$WORKDIR" reset --hard "origin/${GIT_BRANCH}"

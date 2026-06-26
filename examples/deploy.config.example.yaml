@@ -70,7 +70,10 @@ services:
       account_id_secret: CLOUDFLARE_ACCOUNT_ID
       api_token_secret: CLOUDFLARE_API_TOKEN
     healthcheck:
-      url: https://app.example.com/health
+      # Prefer a URL that returns 2xx directly (/health, /sign-in). SPA roots often redirect (307).
+      url: https://app.example.com/sign-in
+      # follow_redirects: true
+      # accept_status: [200, 301, 302, 307, 308]
 
   backend:
     image: ghcr.io/company/backend

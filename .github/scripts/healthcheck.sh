@@ -20,6 +20,19 @@ write_failure_detail() {
   } >> "${GITHUB_OUTPUT:?GITHUB_OUTPUT required}"
 }
 
+http_status_accepted() {
+  local http_code="$1"
+  local accept_json="$2"
+
+  if [[ "$accept_json" != "[]" && "$accept_json" != "null" && -n "$accept_json" ]]; then
+    echo "$accept_json" | jq -e --argjson code "$http_code" \
+      'any(. == $code or (.|tostring) == ($code|tostring))' >/dev/null
+    return $?
+  fi
+
+  [[ "$http_code" =~ ^2 ]]
+}
+
 run_healthcheck() {
   if [[ "$(cfg_healthcheck_enabled)" != "true" ]]; then
     echo "status=skipped" >> "$GITHUB_OUTPUT"
@@ -37,26 +50,33 @@ run_healthcheck() {
     return 0
   fi
 
-  local timeout retries interval
+  local timeout retries interval follow_redirects accept_json
   timeout="$(cfg_healthcheck_timeout)"
   retries="$(cfg_healthcheck_retries)"
   interval="$(cfg_healthcheck_interval)"
+  follow_redirects="$(cfg_service_healthcheck_follow_redirects "$SERVICE")"
+  accept_json="$(cfg_service_healthcheck_accept_status_json "$SERVICE")"
 
   local attempt=0 http_code curl_err last_detail=""
+  local curl_args=(-o /dev/null -sS -w "%{http_code}" --max-time "$timeout")
+  if [[ "$follow_redirects" == "true" ]]; then
+    curl_args+=(-L)
+  fi
+
   while [[ $attempt -lt $retries ]]; do
     attempt=$((attempt + 1))
     http_code=0
     curl_err=""
-    if http_code=$(curl -o /dev/null -sS -w "%{http_code}" --max-time "$timeout" "$url" 2>/tmp/curl.err); then
-      if [[ "$http_code" =~ ^2 ]]; then
+    if http_code=$(curl "${curl_args[@]}" "$url" 2>/tmp/curl.err); then
+      if http_status_accepted "$http_code" "$accept_json"; then
         echo "status=success" >> "$GITHUB_OUTPUT"
         audit_healthcheck "$SERVICE" "OK" "${attempt}/${retries}"
         return 0
       fi
-      last_detail="GET ${url} → HTTP ${http_code} (tentativa ${attempt}/${retries})"
+      last_detail="GET ${url} → HTTP ${http_code} (attempt ${attempt}/${retries})"
     else
       curl_err="$(tr '\n' ' ' </tmp/curl.err | head -c 500)"
-      last_detail="GET ${url} → erro: ${curl_err:-connection failed} (tentativa ${attempt}/${retries})"
+      last_detail="GET ${url} → error: ${curl_err:-connection failed} (attempt ${attempt}/${retries})"
     fi
     echo "$last_detail"
     sleep "$interval"

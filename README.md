@@ -319,7 +319,29 @@ If these files are absent, `deployed_ref` falls back to the `IMAGE` input.
 
 The workflow checkout is the **control repository** (workflows, config, scripts). The deployed application may live in a different repo. Set `config.git_remote` (and optionally `config.git_branch`) in `deploy.config.yaml`; the script receives the full `config` as `CONFIG_JSON` during deploy **and** rollback.
 
-See `examples/deploy-scripts/multi-repo-git-sync.sh` for a generic git-sync pattern with marker-file validation and ref recording.
+See `examples/deploy-scripts/multi-repo-git-sync.sh` for a generic git-sync pattern with marker-file validation, safe rollback (refs must belong to `origin/<branch>`), and ref recording.
+
+Rollback refs must belong to the **deployed** repository. If `origin` was previously pointed at a different repo, a stale SHA can break the tree — the example script falls back to `origin/<branch>` when the ref is not an ancestor.
+
+### Health check URLs and redirects
+
+By default, health checks accept **HTTP 2xx only**. SPA root URLs often return `307`/`302` redirects, which fail unless configured otherwise.
+
+**Recommended:** point `healthcheck.url` at a path that returns 2xx directly (`/health`, `/sign-in`, API health endpoint).
+
+**Optional per-service overrides** in `deploy.config.yaml`:
+
+```yaml
+services:
+  frontend:
+    healthcheck:
+      url: https://app.example.com/
+      follow_redirects: true   # curl -L; final response must still match accept rules
+      # OR accept redirect status without following:
+      # accept_status: [200, 301, 302, 307, 308]
+```
+
+When `accept_status` is set, the HTTP code is matched against that list instead of the default 2xx range. When neither option is set, behavior is unchanged (2xx only).
 
 ### Adding a custom strategy
 
@@ -352,6 +374,10 @@ Every push to `main` runs **CI** to validate the repository. Changes under deplo
 3. If approval is enabled, react with 🚀 on the **new** "Waiting for approval" comment (only reactions after that comment count; old 🚀 reactions are ignored)
 
 Concurrency is set to `cancel-in-progress: true` — a new run cancels any in-progress run for the same issue.
+
+### Issue comments and `GH_TOKEN`
+
+Any workflow step that posts issue comments (via `audit.sh`, `gh issue comment`, etc.) must have `GH_TOKEN`, `GITHUB_REPOSITORY`, and `ISSUE_NUMBER` in its environment. The deploy workflow sets these at **job level** on `wait-approval`, `healthcheck`, `rollback`, `manual-rollback`, and `finalize`. When adding custom steps that audit to the issue, include the same `env` block.
 
 ## Issue form and label sync
 
@@ -483,6 +509,19 @@ deployment:
 | Inline SSH health checks       | `healthcheck.sh` + config            |
 
 The legacy monolithic workflow (`cd.yml`) has been removed. See `examples/` for reference configuration.
+
+## Upgrading from earlier template versions
+
+Breaking changes when syncing this template into an existing project:
+
+| Change | Action required |
+| ------ | --------------- |
+| **`labeled` no longer triggers deploy** | Retries use **Actions → Deploy → Run workflow** with the issue number. Re-approve with 🚀 on the new approval comment. |
+| **Partial multi-service deploys** | The issue may stay **open** when only some services fail; successful services are left running. Only failed services are rolled back. |
+| **Approval reactions are time-scoped** | Only 🚀 reactions **after** the latest "Waiting for approval" comment count. Old reactions are ignored and removed after approval. |
+| **`deploy-summary` job** | Ensure `actions/checkout` runs before sourcing `.github/scripts/lib/*.sh` in summary/finalize jobs. |
+| **Healthcheck for SPAs** | Use a 2xx URL or set `follow_redirects` / `accept_status` per service. |
+| **Script strategy rollback** | Scripts receive `CONFIG_JSON`; multi-repo deploys should validate rollback refs belong to `origin/<branch>`. |
 
 ## Requirements
 

@@ -75,6 +75,10 @@ jobs:
     needs: setup
     if: needs.setup.outputs.valid == 'true' && needs.setup.outputs.approval_enabled == 'true'
     runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GITHUB_REPOSITORY: ${{ github.repository }}
+      ISSUE_NUMBER: ${{ github.event.issue.number || github.event.inputs.issue_number }}
     outputs:
       approved: ${{ steps.approval.outputs.approved }}
       approver: ${{ steps.approval.outputs.approver }}
@@ -295,6 +299,10 @@ jobs:
       needs.setup.outputs.healthcheck_enabled == 'true' &&
       (needs.setup.outputs.approval_enabled != 'true' || needs.wait-approval.result == 'success')
     runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GITHUB_REPOSITORY: ${{ github.repository }}
+      ISSUE_NUMBER: ${{ github.event.issue.number || github.event.inputs.issue_number }}
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.setup.outputs.matrix) }}
@@ -314,12 +322,9 @@ jobs:
           merge-multiple: true
           path: /tmp/deploy-outcomes
 
-      - name: Run health check or skip
+      - name: Skip health check (deploy failed)
         id: health
         env:
-          GH_TOKEN: ${{ github.token }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          ISSUE_NUMBER: ${{ github.event.issue.number || github.event.inputs.issue_number }}
           SERVICE: ${{ matrix.service }}
         run: |
           set -euo pipefail
@@ -391,6 +396,10 @@ jobs:
         needs.healthcheck.result == 'failure'
       )
     runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GITHUB_REPOSITORY: ${{ github.repository }}
+      ISSUE_NUMBER: ${{ github.event.issue.number || github.event.inputs.issue_number }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -451,6 +460,9 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.setup.outputs.matrix) }}
     env:
+      GH_TOKEN: ${{ github.token }}
+      GITHUB_REPOSITORY: ${{ github.repository }}
+      ISSUE_NUMBER: ${{ github.event.issue.number || github.event.inputs.issue_number }}
       PRODUCTION_SSH_HOST: ${{ secrets.PRODUCTION_SSH_HOST }}
       PRODUCTION_SSH_USERNAME: ${{ secrets.PRODUCTION_SSH_USERNAME }}
       PRODUCTION_SSH_KEY: ${{ secrets.PRODUCTION_SSH_KEY }}
@@ -471,12 +483,9 @@ jobs:
           merge-multiple: true
           path: /tmp/outcomes
 
-      - name: Check if rollback needed
+      - name: Record rollback skipped
         id: needs_rollback
         env:
-          GH_TOKEN: ${{ github.token }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          ISSUE_NUMBER: ${{ github.event.issue.number || github.event.inputs.issue_number }}
           SERVICE: ${{ matrix.service }}
         run: |
           set -euo pipefail
@@ -503,10 +512,6 @@ jobs:
       - name: Execute rollback
         id: rollback
         if: steps.needs_rollback.outputs.needed == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          ISSUE_NUMBER: ${{ github.event.issue.number || github.event.inputs.issue_number }}
         run: |
           PREVIOUS_REF="unknown"
           DEPLOYED_REF="${{ matrix.image }}"
@@ -562,6 +567,9 @@ jobs:
     strategy:
       matrix: ${{ fromJSON(needs.setup.outputs.matrix) }}
     env:
+      GH_TOKEN: ${{ github.token }}
+      GITHUB_REPOSITORY: ${{ github.repository }}
+      ISSUE_NUMBER: ${{ github.event.issue.number || github.event.inputs.issue_number }}
       PRODUCTION_SSH_HOST: ${{ secrets.PRODUCTION_SSH_HOST }}
       PRODUCTION_SSH_USERNAME: ${{ secrets.PRODUCTION_SSH_USERNAME }}
       PRODUCTION_SSH_KEY: ${{ secrets.PRODUCTION_SSH_KEY }}
@@ -584,9 +592,6 @@ jobs:
 
       - name: Check manual rollback reaction
         env:
-          GH_TOKEN: ${{ github.token }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
-          ISSUE_NUMBER: ${{ github.event.issue.number || github.event.inputs.issue_number }}
           MANUAL_ROLLBACK_POLL_SECONDS: "300"
           POLL_INTERVAL_SECONDS: "30"
         run: |
@@ -612,6 +617,10 @@ jobs:
     needs: [setup, wait-approval, deploy, deploy-summary, healthcheck, rollback-notify, rollback]
     if: always() && needs.setup.outputs.valid == 'true'
     runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GITHUB_REPOSITORY: ${{ github.repository }}
+      ISSUE_NUMBER: ${{ github.event.issue.number || github.event.inputs.issue_number }}
     permissions:
       contents: read
       issues: write

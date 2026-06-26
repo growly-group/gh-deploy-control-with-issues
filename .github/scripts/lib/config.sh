@@ -123,6 +123,16 @@ cfg_service_healthcheck_endpoint() {
   cfg ".services.${service}.healthcheck.endpoint // \"\""
 }
 
+cfg_service_healthcheck_follow_redirects() {
+  local service="$1"
+  cfg ".services.${service}.healthcheck.follow_redirects // false"
+}
+
+cfg_service_healthcheck_accept_status_json() {
+  local service="$1"
+  cfg_json ".services.${service}.healthcheck.accept_status // []"
+}
+
 cfg_service_deploy_option_ids() {
   local service="$1"
   cfg ".services.${service}.options.deploy_options // [] | .[].id"
